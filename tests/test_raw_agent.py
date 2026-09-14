@@ -12,8 +12,9 @@ def test_schema_carries_name_description_and_required_arguments() -> None:
     assert schema["parameters"]["required"] == ["expression"]
 
 
-def test_a_tool_without_arguments_requires_nothing() -> None:
-    assert tool_schema(today)["function"]["parameters"]["required"] == []
+def test_a_tool_without_arguments_omits_required() -> None:
+    """Matching what FastMCP serves: an empty required list is absent, not empty."""
+    assert "required" not in tool_schema(today)["function"]["parameters"]
 
 
 def test_unknown_tool_is_reported_to_the_model() -> None:

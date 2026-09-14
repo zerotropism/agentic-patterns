@@ -19,6 +19,9 @@ def tool_schema(function: Callable) -> dict:
     This is the part a framework writes for you: name, description, parameter types,
     and which parameters are required. The ollama client can also accept a callable
     directly; it is spelled out here because that is what this variant is about.
+
+    The shape matches what FastMCP serves for the same function, so the comparison
+    between variants measures the approach rather than the schema.
     """
     properties, required = {}, []
 
@@ -27,16 +30,20 @@ def tool_schema(function: Callable) -> dict:
         if parameter.default is inspect.Parameter.empty:
             required.append(name)
 
+    parameters: dict = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+    }
+    if required:
+        parameters["required"] = required
+
     return {
         "type": "function",
         "function": {
             "name": function.__name__,
             "description": inspect.getdoc(function) or "",
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
+            "parameters": parameters,
         },
     }
 
