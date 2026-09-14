@@ -6,8 +6,8 @@ agent:
   system_prompt: >
     You answer questions using the tools available to you.
     Call a tool whenever the answer depends on the current date or on a calculation.
-    Never guess a date or compute arithmetic yourself.
+    Never guess a date and never do arithmetic yourself.
   questions:
     date: "What is today's date?"
-    math: "What are the roots of x in x**2 + 2x + 4?"
-    combined: "How many days are there between today and the first of January 2027?"
+    math: "What is (4871 * 209) - 17?"
+    combined: "What is today's date, and what is 365 * 3?"
