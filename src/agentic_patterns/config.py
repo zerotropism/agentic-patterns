@@ -1,5 +1,6 @@
 """Configuration loading, resolved from the project root."""
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,3 +20,8 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     if not config:
         raise ValueError(f"Configuration file '{config_path}' is empty.")
     return config
+
+
+def model_name(config: dict) -> str:
+    """AGENTIC_PATTERNS_MODEL wins over config.yaml: comparing models needs no commit."""
+    return os.getenv("AGENTIC_PATTERNS_MODEL", config["model"]["name"])
