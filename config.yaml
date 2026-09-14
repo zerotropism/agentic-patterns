@@ -1,0 +1,13 @@
+model:
+  name: "llama3.2:3b"
+  temperature: 0.0
+
+agent:
+  system_prompt: >
+    You answer questions using the tools available to you.
+    Call a tool whenever the answer depends on the current date or on a calculation.
+    Never guess a date and never do arithmetic yourself.
+  questions:
+    date: "What is today's date?"
+    math: "What is (4871 * 209) - 17?"
+    combined: "What is today's date, and what is 365 * 3?"
