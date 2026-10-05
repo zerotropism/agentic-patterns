@@ -1,5 +1,7 @@
 """LangChain variant, driven by a fake chat model: no Ollama, no network."""
 
+from datetime import date
+
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
@@ -31,7 +33,7 @@ async def test_a_single_tool_call_is_executed_and_reported() -> None:
     result = await agent.run("date?")
 
     assert result.variant == "langchain"
-    assert [(c.name, c.result) for c in result.tool_calls] == [("today", "2026-09-14")]
+    assert [(c.name, c.result) for c in result.tool_calls] == [("today", date.today().isoformat())]
     assert result.answer == "Today is 2026-09-14."
 
 
