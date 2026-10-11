@@ -5,12 +5,12 @@ description = "The same agentic use cases, implemented three ways, side by side"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "cyclopts>=5.1.1",
-    "fastmcp>=4.0.10",
-    "langchain>=1.4.3",
+    "cyclopts>=5.2.0",
+    "fastmcp>=4.0.11",
+    "langchain>=1.4.4",
     "langchain-ollama>=1.1.0",
     "ollama>=0.6.3",
-    "pydantic>=2.10",
+    "pydantic>=2.14.0",
     "pyyaml>=6.0.3",
     "rich>=14",
 ]
