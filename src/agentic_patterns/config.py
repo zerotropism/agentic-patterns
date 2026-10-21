@@ -6,6 +6,8 @@ from typing import Any
 
 import yaml
 
+from agentic_patterns.models import GenerationSettings, Question
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG = ROOT / "config.yaml"
 
@@ -25,3 +27,26 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
 def model_name(config: dict) -> str:
     """AGENTIC_PATTERNS_MODEL wins over config.yaml: comparing models needs no commit."""
     return os.getenv("AGENTIC_PATTERNS_MODEL", config["model"]["name"])
+
+
+def generation_settings(config: dict) -> GenerationSettings:
+    """The sampling settings every variant sends, from the model section."""
+    model = config["model"]
+    defaults = GenerationSettings()
+    return GenerationSettings(
+        temperature=float(model.get("temperature", defaults.temperature)),
+        think=bool(model.get("think", defaults.think)),
+    )
+
+
+def configured_questions(config: dict) -> dict[str, Question]:
+    """Every configured question, by name, with what the bench checks for it."""
+    return {
+        name: Question(
+            name=name,
+            text=spec["text"],
+            tools=tuple(spec.get("tools", ())),
+            expect=tuple(spec.get("expect", ())),
+        )
+        for name, spec in config["agent"]["questions"].items()
+    }

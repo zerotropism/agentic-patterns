@@ -2,14 +2,20 @@
 
 import pytest
 
-from agentic_patterns.cli import build_agent, questions_from
+from agentic_patterns.cli import build_agent, questions_from, select_questions
+from agentic_patterns.config import load_config
+from agentic_patterns.models import GenerationSettings
 from agentic_patterns.patterns.agent import VARIANTS
+from agentic_patterns.protocols import Pattern
 
 CONFIG = {
-    "model": {"name": "fake"},
+    "model": {"name": "fake", "temperature": 0.3, "think": True},
     "agent": {
         "system_prompt": "p",
-        "questions": {"date": "What is today's date?", "math": "What is 2 + 2?"},
+        "questions": {
+            "date": {"text": "What is today's date?", "tools": ["today"], "expect": ["{today}"]},
+            "math": {"text": "What is 2 + 2?"},
+        },
     },
 }
 
@@ -17,6 +23,17 @@ CONFIG = {
 @pytest.mark.parametrize("variant", sorted(VARIANTS))
 def test_every_variant_can_be_built(variant: str) -> None:
     assert build_agent(variant, CONFIG).name == variant
+
+
+@pytest.mark.parametrize("variant", sorted(VARIANTS))
+def test_every_variant_is_a_pattern(variant: str) -> None:
+    assert isinstance(build_agent(variant, CONFIG), Pattern)
+
+
+@pytest.mark.parametrize("variant", sorted(VARIANTS))
+def test_every_variant_gets_the_configured_settings(variant: str) -> None:
+    """The bias this guards against: raw and mcp used to send no temperature at all."""
+    assert build_agent(variant, CONFIG).settings == GenerationSettings(temperature=0.3, think=True)
 
 
 def test_unknown_variant_lists_the_available_ones() -> None:
@@ -34,3 +51,18 @@ def test_an_unknown_name_is_taken_as_the_question_itself() -> None:
 
 def test_no_name_runs_every_configured_question() -> None:
     assert len(questions_from(CONFIG, None)) == 2
+
+
+def test_checks_come_with_the_question() -> None:
+    date_question = select_questions(CONFIG, "date")[0]
+    assert (date_question.tools, date_question.expect) == (("today",), ("{today}",))
+
+
+def test_a_question_without_checks_has_none() -> None:
+    assert select_questions(CONFIG, "math")[0].expect == ()
+
+
+def test_the_shipped_configuration_checks_every_question() -> None:
+    """A question without expected values would score zero on every run."""
+    questions = select_questions(load_config(), None)
+    assert questions and all(question.tools and question.expect for question in questions)
