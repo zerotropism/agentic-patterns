@@ -4,6 +4,32 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
+class GenerationSettings:
+    """Sampling settings every variant sends to the model.
+
+    Ollama's own defaults differ from LangChain's, so a variant that passes nothing does
+    not run the same model as one that does. Every variant takes this object and sends
+    both fields, which is what makes the comparison about the machinery.
+    """
+
+    temperature: float = 0.0
+    think: bool = False
+
+
+DEFAULT_SETTINGS = GenerationSettings()
+
+
+@dataclass(frozen=True, slots=True)
+class Question:
+    """A question, and what a correct run looks like for the bench."""
+
+    name: str
+    text: str
+    tools: tuple[str, ...] = ()
+    expect: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ToolCall:
     """One tool invocation, as the variant observed it."""
 

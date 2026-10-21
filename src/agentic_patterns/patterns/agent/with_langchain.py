@@ -8,7 +8,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_ollama import ChatOllama
 
-from agentic_patterns.models import RunResult, ToolCall
+from agentic_patterns.models import DEFAULT_SETTINGS, GenerationSettings, RunResult, ToolCall
 from agentic_patterns.tools import TOOLS
 
 
@@ -43,13 +43,18 @@ class LangChainAgent:
         model: str,
         system_prompt: str,
         tools: Sequence[Callable] = TOOLS,
-        temperature: float = 0.0,
+        settings: GenerationSettings = DEFAULT_SETTINGS,
         chat_model: Any = None,
     ) -> None:
         self.model = model
-        # chat_model is injected by the tests; production builds a real ChatOllama
+        self.settings = settings
+        # chat_model is injected by the tests; production builds a real ChatOllama.
+        # reasoning is ChatOllama's name for Ollama's think flag.
+        self.chat_model = chat_model or ChatOllama(
+            model=model, temperature=settings.temperature, reasoning=settings.think
+        )
         self.agent = create_agent(
-            chat_model or ChatOllama(model=model, temperature=temperature),
+            self.chat_model,
             list(tools),
             system_prompt=system_prompt,
         )
