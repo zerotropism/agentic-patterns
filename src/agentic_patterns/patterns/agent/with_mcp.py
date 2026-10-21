@@ -7,7 +7,7 @@ import ollama
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 
-from agentic_patterns.models import RunResult, ToolCall
+from agentic_patterns.models import DEFAULT_SETTINGS, GenerationSettings, RunResult, ToolCall
 from agentic_patterns.tools import TOOLS
 
 MAX_ITERATIONS = 6
@@ -48,9 +48,11 @@ class McpAgent:
         system_prompt: str,
         tools: Sequence[Callable] = TOOLS,
         max_iterations: int = MAX_ITERATIONS,
+        settings: GenerationSettings = DEFAULT_SETTINGS,
     ) -> None:
         self.model = model
         self.system_prompt = system_prompt
+        self.settings = settings
         self.server = build_server(tools)
         self.max_iterations = max_iterations
 
@@ -76,7 +78,13 @@ class McpAgent:
             schemas = [to_ollama_tool(tool) for tool in await client.list_tools()]
 
             for _ in range(self.max_iterations):
-                response = await chat.chat(model=self.model, messages=messages, tools=schemas)
+                response = await chat.chat(
+                    model=self.model,
+                    messages=messages,
+                    tools=schemas,
+                    options={"temperature": self.settings.temperature},
+                    think=self.settings.think,
+                )
                 model_calls += 1
                 message = response["message"]
                 messages.append(message)

@@ -1,13 +1,29 @@
 model:
   name: "llama3.2:3b"
+  # Sent by every variant. Ollama's default temperature is not 0, and LangChain's is
+  # not Ollama's, so leaving it out makes the variants run different models.
   temperature: 0.0
+  # Reasoning models think before answering unless told not to; no effect on others.
+  think: false
 
 agent:
   system_prompt: >
     You answer questions using the tools available to you.
     Call a tool whenever the answer depends on the current date or on a calculation.
     Never guess a date and never do arithmetic yourself.
+  # text is what the model is asked. tools and expect are what the bench checks:
+  # every listed tool called without error, every expected value in the answer.
+  # {today} stands for today's date, written in any of the usual ways.
   questions:
-    date: "What is today's date?"
-    math: "What is (4871 * 209) - 17?"
-    combined: "What is today's date, and what is 365 * 3?"
+    date:
+      text: "What is today's date?"
+      tools: [today]
+      expect: ["{today}"]
+    math:
+      text: "What is (4871 * 209) - 17?"
+      tools: [calculate]
+      expect: ["1018022"]
+    combined:
+      text: "What is today's date, and what is 365 * 3?"
+      tools: [today, calculate]
+      expect: ["{today}", "1095"]

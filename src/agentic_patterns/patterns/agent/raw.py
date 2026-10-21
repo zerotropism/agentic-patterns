@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 
 import ollama
 
-from agentic_patterns.models import RunResult, ToolCall
+from agentic_patterns.models import DEFAULT_SETTINGS, GenerationSettings, RunResult, ToolCall
 from agentic_patterns.tools import TOOLS
 
 MAX_ITERATIONS = 6
@@ -59,9 +59,11 @@ class RawAgent:
         system_prompt: str,
         tools: Sequence[Callable] = TOOLS,
         max_iterations: int = MAX_ITERATIONS,
+        settings: GenerationSettings = DEFAULT_SETTINGS,
     ) -> None:
         self.model = model
         self.system_prompt = system_prompt
+        self.settings = settings
         self.tools = {tool.__name__: tool for tool in tools}
         self.schemas = [tool_schema(tool) for tool in tools]
         self.max_iterations = max_iterations
@@ -87,7 +89,13 @@ class RawAgent:
         started = time.perf_counter()
 
         for _ in range(self.max_iterations):
-            response = await client.chat(model=self.model, messages=messages, tools=self.schemas)
+            response = await client.chat(
+                model=self.model,
+                messages=messages,
+                tools=self.schemas,
+                options={"temperature": self.settings.temperature},
+                think=self.settings.think,
+            )
             model_calls += 1
             message = response["message"]
             messages.append(message)
