@@ -46,7 +46,7 @@ def build_agent(variant: str, config: dict) -> Pattern:
 def select_questions(config: dict, name: str | None) -> list[Question]:
     """Named question from the configuration, all of them, or a literal question.
 
-    A literal question has nothing to check against, so the bench scores it zero.
+    A literal question has nothing to check against: run answers it, bench refuses it.
     """
     configured = configured_questions(config)
     if name is None:
@@ -97,9 +97,13 @@ async def bench(
     summary, with 95% intervals on the rates, in summary-<stamp>.md next to it.
     """
     loaded = load_config(config)
+    questions = select_questions(loaded, question)
+    unchecked = [q.name for q in questions if not q.checked]
+    if unchecked:
+        console.print(f"No tools or expect configured for: {escape(', '.join(unchecked))}.")
+        raise SystemExit(1)
     names = variants or list(VARIANTS)
     agents = {name: build_agent(name, loaded) for name in names}
-    questions = select_questions(loaded, question)
     model, settings = model_name(loaded), generation_settings(loaded)
 
     directory = Path(output)

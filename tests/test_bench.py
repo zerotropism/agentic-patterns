@@ -11,6 +11,7 @@ from agentic_patterns.bench import (
     answer_ok,
     rotated,
     run_bench,
+    score,
     summarize,
     summary_markdown,
     tools_ok,
@@ -22,6 +23,8 @@ DAY = date(2026, 10, 20)
 DATE = Question("date", "date?", tools=("today",), expect=("{today}",))
 MATH = Question("math", "math?", tools=("calculate",), expect=("1018022",))
 COMBINED = Question("combined", "both?", tools=("today", "calculate"), expect=("{today}", "1095"))
+CHAINED = Question("chained", "2100?", tools=("today", "calculate"), expect=("=2100 - {year}",))
+NO_TOOL = Question("no_tool", "capital?", tools=(), expect=("Paris",))
 
 
 @pytest.mark.parametrize(
@@ -72,6 +75,29 @@ def test_tools_ok_needs_every_tool_to_succeed() -> None:
     assert tools_ok(result(("today", "2026-10-20"), ("calculate", "1095")), COMBINED)
     assert not tools_ok(result(("today", "2026-10-20")), COMBINED)
     assert not tools_ok(result(("today", "x"), ("calculate", "Error: bad")), COMBINED)
+
+
+def test_a_computed_value_depends_on_the_day() -> None:
+    assert answer_ok("74 years are left.", CHAINED, DAY)
+    assert not answer_ok("76 years are left.", CHAINED, DAY)
+    assert answer_ok("73 years", CHAINED, date(2027, 1, 1))
+
+
+def test_a_question_needing_no_tool_fails_if_one_is_called() -> None:
+    assert tools_ok(result(answer="Paris"), NO_TOOL)
+    assert not tools_ok(result(("today", "2026-10-20"), answer="Paris"), NO_TOOL)
+
+
+def test_an_unchecked_question_accepts_any_tools() -> None:
+    assert tools_ok(result(("today", "x")), Question("q", "q"))
+
+
+def test_a_tool_error_followed_by_a_success_still_counts() -> None:
+    """The recovery question: the first attempt fails, the second one is right."""
+    recovery = Question("recovery", "?", tools=("calculate",), expect=("1036",))
+    run = result(("calculate", "Error: Unsupported expression element"), ("calculate", "1036.0"))
+    assert tools_ok(run, recovery)
+    assert score(run, None, recovery, "v", 0, DAY)["tool_errors"] == 1
 
 
 def test_wilson_interval_is_sound_at_the_extremes() -> None:
@@ -162,7 +188,7 @@ async def test_summary_has_one_line_per_question_and_variant_then_totals() -> No
     assert (totals["a"]["n"], totals["a"]["answer_ok"], totals["b"]["answer_ok"]) == (4, 2, 0)
 
     markdown = summary_markdown(lines, "m", GenerationSettings(), 2, "stamp")
-    assert "| math | a | 2/2 (0.34-1.00) | 2/2 (0.34-1.00) | 0 | 2.0 | 0.5 | 0.5 |" in markdown
+    assert "| math | a | 2/2 (0.34-1.00) | 2/2 (0.34-1.00) | 0 | 0 | 2.0 | 0.5 | 0.5 |" in markdown
 
 
 def test_the_sink_appends_one_json_line_per_run(tmp_path) -> None:
