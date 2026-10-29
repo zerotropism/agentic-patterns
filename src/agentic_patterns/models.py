@@ -21,12 +21,20 @@ DEFAULT_SETTINGS = GenerationSettings()
 
 @dataclass(frozen=True, slots=True)
 class Question:
-    """A question, and what a correct run looks like for the bench."""
+    """A question, and what a correct run looks like for the bench.
+
+    tools None means the tools are not checked; an empty tuple means no tool may be called.
+    """
 
     name: str
     text: str
-    tools: tuple[str, ...] = ()
+    tools: tuple[str, ...] | None = None
     expect: tuple[str, ...] = ()
+
+    @property
+    def checked(self) -> bool:
+        """Whether the bench has anything to score this question against."""
+        return self.tools is not None and bool(self.expect)
 
 
 @dataclass(frozen=True, slots=True)

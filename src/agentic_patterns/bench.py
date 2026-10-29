@@ -2,11 +2,13 @@
 
 A run is scored on two things, independently:
 
-- tools: every tool the question needs was called, and returned without error;
+- tools: every tool the question needs was called, and returned without error at least
+  once; for a question that needs no tool, no tool was called at all;
 - answer: every expected value appears in the final answer.
 
 A run can call the right tools and still answer wrong, or skip the tools and happen to
 be right. The second case is the one the system prompt forbids, so both are reported.
+Tool calls that returned an error are counted apart: a run can recover from one.
 """
 
 import asyncio
@@ -24,6 +26,7 @@ from typing import Any
 
 from agentic_patterns.models import GenerationSettings, Question, RunResult
 from agentic_patterns.protocols import Pattern
+from agentic_patterns.tools import calculate
 
 TODAY = "{today}"
 Z_95 = 1.96
@@ -56,9 +59,22 @@ def date_forms(day: date) -> list[str]:
     ]
 
 
+def computed(expression: str, today: date) -> str:
+    """An expected value that depends on the day: '=2100 - {year}' gives 74 in 2026.
+
+    Evaluated by the same arithmetic the calculate tool uses, so nothing else runs.
+    """
+    value = calculate(expression.format(year=today.year, month=today.month, day=today.day))
+    return value.removesuffix(".0")
+
+
 def alternatives(expected: str, today: date) -> list[str]:
     """What counts as the expected value in an answer."""
-    return date_forms(today) if expected == TODAY else [normalize(expected)]
+    if expected == TODAY:
+        return date_forms(today)
+    if expected.startswith("="):
+        return [computed(expected[1:], today)]
+    return [normalize(expected)]
 
 
 def contains(answer: str, value: str) -> bool:
@@ -74,8 +90,17 @@ def answer_ok(answer: str, question: Question, today: date) -> bool:
     )
 
 
+def failed(result_text: str) -> bool:
+    """raw and mcp report a failing tool to the model as text starting with Error."""
+    return result_text.startswith("Error")
+
+
 def tools_ok(result: RunResult, question: Question) -> bool:
-    succeeded = {call.name for call in result.tool_calls if not call.result.startswith("Error")}
+    if question.tools is None:
+        return True
+    if not question.tools:
+        return not result.tool_calls
+    succeeded = {call.name for call in result.tool_calls if not failed(call.result)}
     return set(question.tools) <= succeeded
 
 
@@ -103,6 +128,7 @@ def score(
         return row | {
             "tools": [],
             "tool_calls": [],
+            "tool_errors": 0,
             "answer": "",
             "model_calls": 0,
             "seconds": None,
@@ -113,6 +139,7 @@ def score(
     return row | {
         "tools": [call.name for call in result.tool_calls],
         "tool_calls": [asdict(call) for call in result.tool_calls],
+        "tool_errors": sum(failed(call.result) for call in result.tool_calls),
         "answer": result.answer,
         "model_calls": result.model_calls,
         "seconds": round(result.duration_seconds, 3),
@@ -196,6 +223,7 @@ def summary_line(question: str, variant: str, group: Sequence[dict[str, Any]]) -
         "tools_ok": sum(row["tools_ok"] for row in group),
         "answer_ok": sum(row["answer_ok"] for row in group),
         "errors": sum(row["error"] is not None for row in group),
+        "tool_errors": sum(row["tool_errors"] for row in group),
         "model_calls": mean(row["model_calls"] for row in group),
         "seconds_median": median(durations) if durations else None,
         "seconds_p90": quantiles(durations, n=10)[-1] if len(durations) > 1 else None,
@@ -217,13 +245,16 @@ SUMMARY_COLUMNS = (
     "tools ok",
     "answer ok",
     "errors",
+    "tool errors",
     "calls",
     "s median",
     "s p90",
 )
 LEGEND = (
-    "Rates are successes/runs with their 95% Wilson interval. calls is the mean number of "
-    "model calls per run; s median and s p90 are wall-clock seconds per run."
+    "Rates are successes/runs with their 95% Wilson interval. errors counts runs that raised "
+    "or timed out; tool errors counts tool calls that returned an error, over all runs. calls "
+    "is the mean number of model calls per run; s median and s p90 are wall-clock seconds "
+    "per run."
 )
 
 
@@ -234,6 +265,7 @@ def summary_cells(line: dict[str, Any]) -> list[str]:
         rate(line["tools_ok"], line["n"]),
         rate(line["answer_ok"], line["n"]),
         str(line["errors"]),
+        str(line["tool_errors"]),
         f"{line['model_calls']:.1f}",
         seconds(line["seconds_median"]),
         seconds(line["seconds_p90"]),

@@ -13,7 +13,8 @@ agent:
     Never guess a date and never do arithmetic yourself.
   # text is what the model is asked. tools and expect are what the bench checks:
   # every listed tool called without error, every expected value in the answer.
-  # {today} stands for today's date, written in any of the usual ways.
+  # tools: [] means no tool may be called. {today} stands for today's date, written in
+  # any of the usual ways; a value starting with = is computed on the day of the run.
   questions:
     date:
       text: "What is today's date?"
@@ -27,3 +28,19 @@ agent:
       text: "What is today's date, and what is 365 * 3?"
       tools: [today, calculate]
       expect: ["{today}", "1095"]
+    # The second call needs the first one's result: the year comes from today
+    chained:
+      text: "How many years are left until the year 2100?"
+      tools: [today, calculate]
+      expect: ["=2100 - {year}"]
+    # ^ is not a power in Python and sqrt is not supported: passing the question as it is
+    # written fails, and the run then succeeds only if the error reaches the model
+    recovery:
+      text: "What is 2^10 + sqrt(144)?"
+      tools: [calculate]
+      expect: ["1036"]
+    # Nothing here depends on the date or on arithmetic: no tool should be called
+    no_tool:
+      text: "What is the capital of France?"
+      tools: []
+      expect: ["Paris"]

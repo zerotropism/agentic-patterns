@@ -45,7 +45,7 @@ def configured_questions(config: dict) -> dict[str, Question]:
         name: Question(
             name=name,
             text=spec["text"],
-            tools=tuple(spec.get("tools", ())),
+            tools=tuple(spec["tools"]) if "tools" in spec else None,
             expect=tuple(spec.get("expect", ())),
         )
         for name, spec in config["agent"]["questions"].items()
