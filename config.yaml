@@ -44,3 +44,24 @@ agent:
       text: "What is the capital of France?"
       tools: []
       expect: ["Paris"]
+
+# The structured prompt case: put a product in one of a few shop categories.
+# The reference is the first segment of the product's category path in the file.
+prompt:
+  data: data/amazon.csv
+  categories: [Electronics, Computers&Accessories, Home&Kitchen, OfficeProducts]
+  # The first product of each category, in file order, is shown as an example; the sample
+  # is drawn among the others with a fixed seed, so it is the same on every run
+  per_category: 25
+  seed: 7
+  description_chars: 500
+  # MCP prompts have user and assistant messages only, no system role: the instructions
+  # are the first user message, in all three variants
+  instructions: >
+    You sort the products of an online shop into categories.
+    Allowed categories: {categories}.
+    Answer with exactly one category from this list, written as it is written here,
+    and nothing else.
+  user: |
+    Product: {name}
+    Description: {description}
