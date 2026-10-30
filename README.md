@@ -1,7 +1,8 @@
 # agentic-patterns
 
-The same agentic use case, implemented three ways, side by side: a hand-written tool loop, the
-same thing built with LangChain 1.x, and the same thing again with the tools served over MCP.
+The same agentic use cases, each implemented three ways, side by side: by hand with the Ollama
+client, with LangChain 1.x, and with an MCP server. Two cases so far: an agent with tools, and a
+structured prompt. Each one is measured by the same bench.
 
 The point is not which one wins. It is what you have to write, what the framework writes for
 you, and whether that changes the outcome.
@@ -14,9 +15,11 @@ Requires Python 3.12+, [uv](https://docs.astral.sh/uv/) and a running [Ollama](h
 uv sync
 ollama pull llama3.2:3b
 
-uv run agentic-patterns tools                     # what the three variants share
+uv run agentic-patterns tools                     # what the three agent variants share
 uv run agentic-patterns run combined --variant raw
-uv run agentic-patterns bench                     # every variant, every question, 20 runs
+uv run agentic-patterns bench                     # agent: every variant, every question, 20 runs
+uv run agentic-patterns classify --variant mcp    # structured prompt: one product
+uv run agentic-patterns bench --case prompt       # structured prompt: 100 products
 ```
 
 The model comes from `config.yaml` and can be overridden per run:
@@ -25,7 +28,9 @@ The model comes from `config.yaml` and can be overridden per run:
 AGENTIC_PATTERNS_MODEL=qwen3.5:4b-mlx uv run agentic-patterns bench
 ```
 
-## The three variants
+## Agent with tools
+
+### The three variants
 
 All three answer the same questions, with the same tools, the same system prompt, the same
 model and the same sampling settings (`temperature` and `think`, from `config.yaml`), and return
@@ -46,7 +51,7 @@ of digging the tool calls back out of a message list. `mcp` sits in between — 
 with the tool, the loop does not — and that loop is the one you would write to drive any
 third-party MCP server.
 
-## What the tools are
+### What the tools are
 
 Two plain Python functions, shared by every variant: `today()` and `calculate(expression)`.
 `calculate` evaluates arithmetic through an AST walk that accepts numbers and operators and
@@ -56,7 +61,7 @@ had the model do the arithmetic, and `PythonREPLTool`, which executed whatever t
 Their docstrings are the descriptions sent to the model, in all three variants. One place
 describes each tool.
 
-## Bench
+### Bench
 
 `agentic-patterns bench` runs every variant on every configured question, 20 times by default,
 and scores each run on two counts, independently:
@@ -72,8 +77,8 @@ Tool calls that returned an error are counted apart, since a run can recover fro
 question without checks cannot be benched: `bench --question "..."` is refused.
 
 A run that answers right without calling the tool is the case the system prompt forbids, which
-is why the two counts are kept apart. Variants are interleaved, their order rotates from one run
-to the next, and one warm-up run per variant is discarded. A run that raises or exceeds the
+is why the two counts are kept apart. Variants are interleaved, their order rotates from one
+question and run to the next, and one warm-up run per variant is discarded. A run that raises or exceeds the
 timeout counts as failed. Each outcome is written as it happens to `evaluation/outcomes-*.jsonl`;
 the summary, rates with their 95% Wilson interval, goes to `evaluation/summary-*.md`.
 
@@ -188,6 +193,105 @@ What it shows:
 So the framework does not buy capability here. It buys not writing the loop, and it brings
 defaults that have to be checked against what the hand-written loop does.
 
+## Structured prompt
+
+### The task
+
+Put a product of an online shop in one of four categories: Electronics, Computers&Accessories,
+Home&Kitchen, OfficeProducts. The products come from `data/amazon.csv`, kept from the LangChain
+course this repo started as: the model gets the name and the first 500 characters of the
+description, and the reference is the first segment of the category path in the file
+(`Computers&Accessories|Cables|USBCables` is Computers&Accessories). The file repeats a product
+once per review; 1,351 distinct products remain.
+
+The prompt is the same text with `{placeholders}` for all three variants, in `config.yaml`:
+instructions listing the categories, one example exchange per category (the first product of
+each category in the file), then the product. The bench draws 25 other products per category
+with a fixed seed, 100 in all, none of them shown as an example.
+
+### The three variants
+
+| | template | rendering | where the template lives |
+|---|---|---|---|
+| `raw` | text from `config.yaml` | `str.format`, messages built by hand | the client |
+| `langchain` | the same text | `ChatPromptTemplate` with a `FewShotChatMessagePromptTemplate` | the client |
+| `mcp` | the same text | a FastMCP prompt, `classify_product(name, description)`, fetched with `get_prompt` | the server |
+
+What each one brings:
+
+- `raw` checks nothing: a placeholder without a value raises `KeyError` at the first call, a
+  value without a placeholder is silently dropped.
+- `langchain` declares the template's variables, so a missing one is reported before the model
+  is called, and builds the few-shot exchanges from a list of examples.
+- `mcp` moves the template to the server: a client needs only the prompt's name and its two
+  string arguments, both declared as required, and the template can change without any client
+  changing. MCP prompts have user and assistant messages only, no system role. So that the three
+  variants send the same request, the instructions are the first user message in all three.
+  The server renders with `raw`'s code; what MCP changes is where it runs.
+
+Tests check that the three variants produce the same messages, that `raw` and `mcp` send Ollama
+the same request, and that `langchain` sends the same roles, contents, temperature and `think`.
+
+### Bench
+
+`agentic-patterns bench --case prompt` classifies each product once per variant, and scores two
+things apart:
+
+- format: the answer is exactly one allowed category, nothing before or after;
+- category: the answer names exactly one allowed category, and it is the right one. `Category:
+  Home & Kitchen.` fails the format and passes the category.
+
+A wrong format is fixed by parsing; a wrong category is not. The summary adds one confusion
+matrix per variant. Files: `evaluation/outcomes-prompt-*.jsonl` and `summary-prompt-*.md`.
+
+### Results
+
+Measured on 30 October 2026, temperature 0, `think: false`, 100 products, one run per product
+and variant (`summary-prompt-20261030T104607Z.md` and `summary-prompt-20261030T104716Z.md`):
+
+| model | variant | format ok | category ok | s median | s p90 |
+|---|---|---|---|---|---|
+| `llama3.2:3b` | raw | 100/100 | 67/100 | 0.1 | 0.5 |
+| `llama3.2:3b` | langchain | 100/100 | 67/100 | 0.1 | 0.5 |
+| `llama3.2:3b` | mcp | 100/100 | 67/100 | 0.1 | 0.5 |
+| `qwen3.5:4b-mlx` | raw | 100/100 | 86/100 | 0.3 | 0.7 |
+| `qwen3.5:4b-mlx` | langchain | 100/100 | 85/100 | 0.3 | 0.8 |
+| `qwen3.5:4b-mlx` | mcp | 100/100 | 85/100 | 0.3 | 0.7 |
+
+Where the errors are, true category in rows, category named in columns, the same for the three
+variants except one product:
+
+| `llama3.2:3b` | Electronics | Computers&Accessories | Home&Kitchen | OfficeProducts |
+|---|---|---|---|---|
+| Electronics | 19 | 1 | 4 | 1 |
+| Computers&Accessories | 13 | 8 | 2 | 2 |
+| Home&Kitchen | 5 | 0 | 19 | 1 |
+| OfficeProducts | 0 | 0 | 4 | 21 |
+
+| `qwen3.5:4b-mlx` | Electronics | Computers&Accessories | Home&Kitchen | OfficeProducts |
+|---|---|---|---|---|
+| Electronics | 12 or 13 | 11 or 12 | 1 | 0 |
+| Computers&Accessories | 0 | 25 | 0 | 0 |
+| Home&Kitchen | 0 | 0 | 25 | 0 |
+| OfficeProducts | 0 | 2 | 0 | 23 |
+
+What it shows:
+
+- The three variants send the same request and get the same answers: identical on all 100
+  products with `llama3.2:3b`; with `qwen3.5:4b-mlx`, one Electronics product named Electronics
+  by `raw` and Computers&Accessories by the other two. Their requests are identical by test, so
+  that one product is the model not being strictly deterministic at temperature 0, as one run in
+  360 was in the agent bench.
+- The format is solved by the examples: no answer of 600 had anything around the category.
+- The errors sit on one boundary, Electronics against Computers&Accessories, in opposite
+  directions: `llama3.2:3b` calls half the computer accessories electronics, `qwen3.5:4b-mlx`
+  calls half the electronics computer accessories. The shop's own split is loose there: among
+  products named so, 178 cables are Computers&Accessories and 44 Electronics, chargers 28 and 33,
+  headphones and power banks fall on both sides too. Part of the error is the reference.
+
+So, for a structured prompt, the choice between the three is not about the answers: they are
+the same. It is about what checks the template (`langchain`), and where it lives (`mcp`).
+
 ## Structure
 
 ```
@@ -199,14 +303,21 @@ src/agentic_patterns/
 │   ├── raw.py             ollama client, hand-written loop
 │   ├── with_langchain.py  create_agent
 │   └── with_mcp.py        FastMCP server, driven through a Client
-├── bench.py          scoring, Wilson intervals, the interleaved run loop
+├── patterns/prompt/
+│   ├── task.py            products, sample, the shared template
+│   ├── raw.py             messages built with str.format
+│   ├── with_langchain.py  ChatPromptTemplate, few-shot template
+│   ├── with_mcp.py        FastMCP prompt, fetched with get_prompt
+│   └── scoring.py         format, category, confusion
+├── bench.py          the interleaved run loop, agent scoring, Wilson intervals
 ├── rendering.py      tables
 └── cli.py            cyclopts commands
 evaluation/           bench outcomes and summaries, one pair per measurement
 ```
 
-Adding a variant means adding a class with a `name` and an `async run`, plus one line in
-`patterns/agent/__init__.py`. Adding a use case means a sibling package under `patterns/`.
+Adding a variant means adding a class with a `name` and an `async run`, plus one line in its
+case's `__init__.py`. Adding a use case means a sibling package under `patterns/`, with its own
+scoring, run by the same loop.
 
 An agent holds a client bound to the running event loop, so it must be built and used inside a
 single `asyncio.run`. The CLI does that; a script that calls `asyncio.run` once per question
@@ -224,6 +335,8 @@ One test asserts that the raw and MCP variants send the model identical requests
 settings included. If they diverge, the comparison measures the request instead of the approach.
 Two more check that the LangChain variant binds the same descriptions and reports a failing tool
 to the model, and two keep its out-of-the-box behaviour documented (`framework_defaults=True`).
+For the structured prompt, the three variants are checked to build the same messages and send
+the same request, and the scoring to keep format and category apart.
 
 ## History
 

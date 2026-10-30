@@ -85,3 +85,22 @@ def test_bench_refuses_a_question_it_cannot_score(tmp_path) -> None:
         app(["bench", "--question", "how tall is Everest?", "--output", str(tmp_path)])
     assert exit_info.value.code == 1
     assert not list(tmp_path.iterdir())
+
+
+def test_bench_refuses_an_unknown_case(tmp_path) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        app(["bench", "--case", "nope", "--output", str(tmp_path)])
+    assert exit_info.value.code == 1
+
+
+def test_a_question_applies_to_the_agent_case_only(tmp_path) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        app(["bench", "--case", "prompt", "--question", "date", "--output", str(tmp_path)])
+    assert exit_info.value.code == 1
+    assert not list(tmp_path.iterdir())
+
+
+def test_classify_refuses_a_product_outside_the_sample() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        app(["classify", "NOT-A-PRODUCT"])
+    assert exit_info.value.code == 1
