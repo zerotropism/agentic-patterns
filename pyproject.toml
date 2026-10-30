@@ -5,12 +5,12 @@ description = "The same agentic use cases, implemented three ways, side by side"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "cyclopts>=5.1.1",
+    "cyclopts>=5.3.1",
     "fastmcp>=4.0.10",
-    "langchain>=1.4.3",
+    "langchain>=1.4.7",
     "langchain-ollama>=1.1.0",
     "ollama>=0.6.3",
-    "pydantic>=2.10",
+    "pydantic>=2.14.1",
     "pyyaml>=6.0.3",
     "rich>=14",
 ]
@@ -25,8 +25,8 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    "pytest-asyncio>=1.4",
-    "ruff>=0.16.10",
+    "pytest-asyncio>=1.4.1",
+    "ruff>=0.17.3",
 ]
 
 [tool.pytest.ini_options]
