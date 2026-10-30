@@ -17,7 +17,7 @@ import math
 import re
 import time
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
@@ -149,19 +149,61 @@ def score(
     }
 
 
-async def attempt(agent: Pattern, text: str, timeout: float) -> tuple[RunResult | None, str | None]:
+async def attempt(
+    run: Callable[[], Awaitable[RunResult]], timeout: float
+) -> tuple[RunResult | None, str | None]:
     """Run once. Anything raised is recorded as the outcome, never ends the bench."""
     try:
-        return await asyncio.wait_for(agent.run(text), timeout), None
+        return await asyncio.wait_for(run(), timeout), None
     except Exception as exc:
         # TimeoutError and httpx timeouts carry an empty message; the type is the information
         return None, f"{type(exc).__name__}: {exc}".rstrip(": ")
 
 
-def rotated(names: Sequence[str], run: int) -> list[str]:
-    """Shift the variant order each run, so none always goes first after a cold prompt."""
-    shift = run % len(names)
+def rotated(names: Sequence[str], turn: int) -> list[str]:
+    """Shift the variant order at each turn, so none always goes first after a cold prompt."""
+    shift = turn % len(names)
     return [*names[shift:], *names[:shift]]
+
+
+Score = Callable[[RunResult | None, str | None, Any, str, int], dict[str, Any]]
+
+
+async def run_interleaved(
+    variants: Mapping[str, Pattern],
+    items: Sequence[Any],
+    runs: int,
+    timeout: float,
+    payload: Callable[[Any], Any],
+    score: Score,
+    sink: Callable[[dict[str, Any]], None],
+    warmup: bool = True,
+) -> list[dict[str, Any]]:
+    """Every item, every variant, runs times. The variants take turns on each item, in an
+    order that shifts from one item and run to the next. Each outcome goes to sink as soon
+    as it exists, so an interrupted bench keeps what it measured.
+
+    payload turns an item into what the variants run on; score turns a run into a row.
+    """
+    names = list(variants)
+    rows: list[dict[str, Any]] = []
+
+    if warmup and items:
+        # Loads the model and fills the prompt cache; not measured
+        first = payload(items[0])
+        errors = [(await attempt(lambda n=n: variants[n].run(first), timeout))[1] for n in names]
+        if all(errors):
+            raise RuntimeError(f"Every warm-up run failed, nothing to measure: {errors[0]}")
+
+    for run in range(runs):
+        for index, item in enumerate(items):
+            given = payload(item)
+            for name in rotated(names, run + index):
+                result, error = await attempt(lambda n=name, g=given: variants[n].run(g), timeout)
+                row = score(result, error, item, name, run)
+                rows.append(row)
+                sink(row)
+    return rows
 
 
 async def run_bench(
@@ -173,27 +215,20 @@ async def run_bench(
     today: date | None = None,
     warmup: bool = True,
 ) -> list[dict[str, Any]]:
-    """Every question, every variant, runs times, interleaved. Each outcome goes to sink
-    as soon as it exists, so an interrupted bench keeps what it measured.
-    """
-    today = today or date.today()
-    names = list(agents)
-    rows: list[dict[str, Any]] = []
-
-    if warmup and questions:
-        # Loads the model and fills the prompt cache; not measured
-        errors = [(await attempt(agents[name], questions[0].text, timeout))[1] for name in names]
-        if all(errors):
-            raise RuntimeError(f"Every warm-up run failed, nothing to measure: {errors[0]}")
-
-    for run in range(runs):
-        for question in questions:
-            for name in rotated(names, run):
-                result, error = await attempt(agents[name], question.text, timeout)
-                row = score(result, error, question, name, run, today)
-                rows.append(row)
-                sink(row)
-    return rows
+    """The agent case: every question, every variant, runs times."""
+    day = today or date.today()
+    return await run_interleaved(
+        agents,
+        questions,
+        runs,
+        timeout,
+        payload=lambda question: question.text,
+        score=lambda result, error, question, name, run: score(
+            result, error, question, name, run, day
+        ),
+        sink=sink,
+        warmup=warmup,
+    )
 
 
 def summarize(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -272,6 +307,27 @@ def summary_cells(line: dict[str, Any]) -> list[str]:
     ]
 
 
+def markdown_table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
+    return [
+        "| " + " | ".join(columns) + " |",
+        "|" + "---|" * len(columns),
+        *("| " + " | ".join(row) + " |" for row in rows),
+    ]
+
+
+def markdown_header(
+    title: str, measured_at: str, model: str, settings: GenerationSettings, runs_line: str
+) -> list[str]:
+    return [
+        f"# {title}",
+        "",
+        f"- measured: {measured_at}",
+        f"- model: `{model}`, temperature {settings.temperature}, think {settings.think}",
+        f"- {runs_line}",
+        "",
+    ]
+
+
 def summary_markdown(
     lines: Sequence[dict[str, Any]],
     model: str,
@@ -279,20 +335,11 @@ def summary_markdown(
     runs: int,
     measured_at: str,
 ) -> str:
-    header = [
-        "# Agent bench",
-        "",
-        f"- measured: {measured_at}",
-        f"- model: `{model}`, temperature {settings.temperature}, think {settings.think}",
-        f"- runs per question and variant: {runs}",
-        "",
-        LEGEND,
-        "",
-        "| " + " | ".join(SUMMARY_COLUMNS) + " |",
-        "|" + "---|" * len(SUMMARY_COLUMNS),
-    ]
-    body = ["| " + " | ".join(summary_cells(line)) + " |" for line in lines]
-    return "\n".join(header + body) + "\n"
+    header = markdown_header(
+        "Agent bench", measured_at, model, settings, f"runs per question and variant: {runs}"
+    )
+    table = markdown_table(SUMMARY_COLUMNS, [summary_cells(line) for line in lines])
+    return "\n".join([*header, LEGEND, "", *table]) + "\n"
 
 
 def write_outputs(

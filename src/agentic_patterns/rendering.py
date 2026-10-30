@@ -24,11 +24,15 @@ def render_result(result: RunResult) -> None:
     console.print(escape(result.answer))
 
 
-def render_bench(lines: Sequence[dict[str, Any]]) -> None:
-    """The bench summary, as the markdown file has it."""
-    table = Table(title="Agent bench", title_justify="left")
-    for index, column in enumerate(SUMMARY_COLUMNS):
+def render_table(title: str, columns: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
+    """A bench summary, as the markdown file has it: two label columns, then figures."""
+    table = Table(title=title, title_justify="left")
+    for index, column in enumerate(columns):
         table.add_column(column, justify="left" if index < 2 else "right")
-    for line in lines:
-        table.add_row(*(escape(cell) for cell in summary_cells(line)))
+    for row in rows:
+        table.add_row(*(escape(cell) for cell in row))
     console.print(table)
+
+
+def render_bench(lines: Sequence[dict[str, Any]]) -> None:
+    render_table("Agent bench", SUMMARY_COLUMNS, [summary_cells(line) for line in lines])
