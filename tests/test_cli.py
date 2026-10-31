@@ -117,3 +117,47 @@ def test_an_unknown_variant_is_reported_before_any_call(tmp_path) -> None:
         app(["bench", "--case", "parsing", "--variants", "nope", "--output", str(tmp_path)])
     assert exit_info.value.code == 1
     assert not list(tmp_path.iterdir())
+
+
+def test_converse_refuses_a_conversation_outside_the_sample() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        app(["converse", "nope"])
+    assert exit_info.value.code == 1
+
+
+def test_rescore_scores_a_stored_run_again(tmp_path) -> None:
+    import json
+
+    from agentic_patterns.patterns.memory.task import load_task
+
+    conversation = load_task(load_config())[1][3]
+    row = {
+        "model": "m",
+        "run": 0,
+        "variant": "raw",
+        "conversation": conversation.id,
+        "answer": f"You can receive deliveries on {conversation.expected}s.",
+        "model_calls": 3,
+        "prompt_tokens": 150,
+        "seconds": 2.5,
+        "right": False,
+        "error": None,
+    }
+    source = tmp_path / "outcomes-memory-20261031T160544Z.jsonl"
+    source.write_text(json.dumps(row) + "\n")
+
+    with pytest.raises(SystemExit) as exit_info:
+        app(["rescore", str(source), "--case", "memory"])
+    assert exit_info.value.code in (0, None)
+
+    (rescored,) = tmp_path.glob("outcomes-memory-20261031T160544Z-rescored.jsonl")
+    assert json.loads(rescored.read_text())["right"] is True
+    assert (tmp_path / "summary-memory-20261031T160544Z-rescored.md").is_file()
+
+
+def test_rescore_refuses_the_agent_case(tmp_path) -> None:
+    source = tmp_path / "outcomes-20261029T143717Z.jsonl"
+    source.write_text("")
+    with pytest.raises(SystemExit) as exit_info:
+        app(["rescore", str(source), "--case", "agent"])
+    assert exit_info.value.code == 1

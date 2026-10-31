@@ -1,8 +1,9 @@
 # agentic-patterns
 
 The same agentic use cases, each implemented three ways, side by side: by hand with the Ollama
-client, with LangChain 1.x, and with an MCP server. Three cases so far: an agent with tools, a
-structured prompt, and typed parsing. Each one is measured by the same bench.
+client, with LangChain 1.x, and with an MCP server. Four cases so far: an agent with tools, a
+structured prompt, typed parsing and conversation memory. Each one is measured by the same
+bench.
 
 The point is not which one wins. It is what you have to write, what the framework writes for
 you, and whether that changes the outcome.
@@ -22,6 +23,8 @@ uv run agentic-patterns classify --variant mcp    # structured prompt: one produ
 uv run agentic-patterns bench --case prompt       # structured prompt: 100 products
 uv run agentic-patterns extract --variant mcp     # typed parsing: one listing
 uv run agentic-patterns bench --case parsing      # typed parsing: 100 listings
+uv run agentic-patterns converse --variant mcp    # memory: one conversation
+uv run agentic-patterns bench --case memory       # memory: 36 conversations
 ```
 
 The model comes from `config.yaml` and can be overridden per run:
@@ -392,6 +395,89 @@ What it shows:
 - A field's description only helps if it reaches the model. With `format=`, it does not, and the
   field's name is all there is.
 
+## Conversation memory
+
+### The task
+
+Answer a question about something said turns earlier. Each conversation states a fact at its
+first turn, goes on with unrelated questions, states the same kind of fact about someone else
+somewhere in between, and asks for the fact at its last turn. The model answers every turn;
+only the last answer is scored.
+
+```text
+user: Please note that I live in Kochi.
+user: What is the capital of Japan?
+user: My sister lives in Pune, a long way from me.
+user: Name a fruit that is yellow when ripe.
+user: In which city do I live?             -> Kochi, not Pune
+```
+
+36 conversations, generated with a fixed seed: 12 at each distance (1, 3 and 6 turns between
+the fact and the question), over four kinds of fact taken in turn: a budget, a city, a dog's
+name, a delivery day.
+
+### The three variants
+
+| | where the history lives | what each turn sends |
+|---|---|---|
+| `raw` | a list, local to the run | the whole history, rebuilt by hand |
+| `langchain` | a LangGraph checkpointer (`InMemorySaver`), one thread per run, behind `create_agent` | the new message only; the checkpointer puts the history back |
+| `mcp` | a FastMCP server: a tool `append_message(session, role, content)` and a resource `history://{session}` | the history read from the resource; the answer is appended after |
+
+The checkpointer replaces the 0.x memories (`ConversationBufferMemory` and its siblings), which
+LangChain 1.x removed. The checkpointer and the MCP server outlive a run, so each run gets its
+own thread or session; a test checks that two runs do not share a history. Another checks that
+the three variants send the model the same messages at every turn.
+
+### Bench
+
+`agentic-patterns bench --case memory` plays each conversation once per variant and scores the
+last answer:
+
+- right: it names the fact, and not the distractor;
+- distractor: it names the distractor, and not the fact.
+
+An answer naming both, or neither, is neither. Amounts are compared without separators or `₹`,
+names as whole words, a plural `s` allowed. The summary gives both rates by distance, the size
+of the last prompt as Ollama counted it, and the time per conversation, every turn included.
+
+### Results
+
+Measured on 31 October 2026, temperature 0, `think: false`, one run per conversation and
+variant (`summary-memory-20261031T160544Z-rescored.md` and `…T161200Z-rescored.md`):
+
+| model | variant | distance 1 | distance 3 | distance 6 | all | distractor | last prompt, tokens | s median |
+|---|---|---|---|---|---|---|---|---|
+| `llama3.2:3b` | raw | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.2 |
+| `llama3.2:3b` | langchain | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.3 |
+| `llama3.2:3b` | mcp | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.4 |
+| `qwen3.5:4b-mlx` | raw | 12/12 | 11/12 | 11/12 | 34/36 | 0 | 143, 204, 310 | 4.6 |
+| `qwen3.5:4b-mlx` | langchain | 11/12 | 11/12 | 9/12 | 31/36 | 0 | 142, 204, 313 | 4.8 |
+| `qwen3.5:4b-mlx` | mcp | 12/12 | 10/12 | 10/12 | 32/36 | 0 | 142, 206, 310 | 4.6 |
+
+The first scoring missed a plural: "deliveries on Tuesdays" did not count as Tuesday. Scored
+again with `agentic-patterns rescore`, from the answers already stored, without calling a
+model; the first summaries are kept next to the rescored ones.
+
+What the misses are, all from `qwen3.5:4b-mlx`:
+
+- several days, the right one among them: "Tuesday, Wednesday, and Friday", 5 answers;
+- no answer: "Your dog's name isn't mentioned in our conversation yet", "I don't know where
+  you live", 6 answers.
+
+What it shows:
+
+- No answer of the 216 gave the distractor alone. The history always reached the model, and the
+  model never took someone else's fact for the user's.
+- The variants differ only through the model. The size of `qwen3.5:4b-mlx`'s last prompt varies
+  by one to three tokens from one variant to another: one of its earlier answers was not word
+  for word the same, and the rest of the conversation inherited it. The code sends what it is
+  given, by test; at temperature 0, the model does not always give the same. With
+  `llama3.2:3b`, whose answers were the same, the three variants are identical down to the
+  token.
+- Distance does not matter at this size: from 140 to 330 tokens, memory is not what limits
+  either model.
+
 ## Structure
 
 ```
@@ -415,6 +501,12 @@ src/agentic_patterns/
 │   ├── with_langchain.py  with_structured_output
 │   ├── with_mcp.py        a tool whose parameters are the fields
 │   └── scoring.py         validity, field by field
+├── patterns/memory/
+│   ├── task.py            the conversations, the fact, the distractor
+│   ├── raw.py             a list, sent whole at every turn
+│   ├── with_langchain.py  create_agent and a LangGraph checkpointer
+│   ├── with_mcp.py        a FastMCP server holding the history
+│   └── scoring.py         right, distractor, by distance
 ├── cases.py          the use cases the bench can run
 ├── bench.py          the interleaved run loop, agent scoring, Wilson intervals
 ├── rendering.py      tables
@@ -445,7 +537,11 @@ to the model, and two keep its out-of-the-box behaviour documented (`framework_d
 For the structured prompt, the three variants are checked to build the same messages and send
 the same request, and the scoring to keep format and category apart. For typed parsing, `raw`
 and `langchain` are checked to send the same messages and schema, and the MCP tool's schema to
-match `Listing` field by field.
+match `Listing` field by field. For conversation memory, the three variants are checked to send
+the same history at every turn, and two runs never to share one.
+
+`agentic-patterns rescore <outcomes> --case <case>` scores a stored run again after a change in
+a scorer. The agent case is excluded: its expected date is the day of the run.
 
 ## History
 

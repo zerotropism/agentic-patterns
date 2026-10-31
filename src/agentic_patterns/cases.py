@@ -11,8 +11,11 @@ from typing import Any
 
 from agentic_patterns import bench
 from agentic_patterns.config import configured_questions, generation_settings, model_name
-from agentic_patterns.models import GenerationSettings, Question
+from agentic_patterns.models import GenerationSettings, Question, RunResult, ToolCall
 from agentic_patterns.patterns.agent import VARIANTS as AGENT_VARIANTS
+from agentic_patterns.patterns.memory import VARIANTS as MEMORY_VARIANTS
+from agentic_patterns.patterns.memory import scoring as memory_scoring
+from agentic_patterns.patterns.memory.task import load_task as load_memory
 from agentic_patterns.patterns.parsing import VARIANTS as PARSING_VARIANTS
 from agentic_patterns.patterns.parsing import scoring as parsing_scoring
 from agentic_patterns.patterns.parsing.task import load_task as load_parsing
@@ -23,6 +26,21 @@ from agentic_patterns.patterns.prompt.task import load_task as load_prompt
 from agentic_patterns.protocols import Pattern
 
 Rows = Sequence[dict[str, Any]]
+
+
+def restore(row: dict[str, Any]) -> RunResult | None:
+    """The RunResult an outcome row was scored from; None for a run that raised."""
+    if row.get("error"):
+        return None
+    return RunResult(
+        variant=row["variant"],
+        question="",
+        answer=row.get("answer", ""),
+        tool_calls=[ToolCall(**call) for call in row.get("tool_calls", [])],
+        model_calls=row.get("model_calls", 1),
+        duration_seconds=row.get("seconds") or 0.0,
+        prompt_tokens=row.get("prompt_tokens"),
+    )
 
 
 class CaseError(ValueError):
@@ -64,6 +82,13 @@ def build_parser(variant: str, config: dict, instructions: str) -> Pattern:
     )
 
 
+def build_memory(variant: str, config: dict, system: str) -> Pattern:
+    """One variant of the conversation memory case, with the shared model and settings."""
+    return pick(MEMORY_VARIANTS, variant)(
+        model_name(config), system, settings=generation_settings(config)
+    )
+
+
 def select_questions(config: dict, name: str | None) -> list[Question]:
     """Named question from the configuration, all of them, or a literal question.
 
@@ -89,6 +114,9 @@ class Prepared:
     columns: Sequence[str]
     cells: Callable[[Rows], list[list[str]]]
     markdown: Callable[[Rows, str, GenerationSettings, int, str], str]
+    # How an outcome row names its item, so that a stored run can be scored again
+    row_key: str = ""
+    item_key: Callable[[Any], str] = lambda item: ""
 
 
 @dataclass(frozen=True)
@@ -151,6 +179,8 @@ def prepare_prompt(config: dict, names: Sequence[str] | None, question: str | No
         markdown=lambda rows, model, settings, runs, stamp: prompt_scoring.summary_markdown(
             rows, spec.categories, model, settings, runs, stamp
         ),
+        row_key="product",
+        item_key=lambda product: product.id,
     )
 
 
@@ -171,6 +201,30 @@ def prepare_parsing(config: dict, names: Sequence[str] | None, question: str | N
             parsing_scoring.summary_cells(line) for line in parsing_scoring.summarize(rows)
         ],
         markdown=parsing_scoring.summary_markdown,
+        row_key="item",
+        item_key=lambda item: item.id,
+    )
+
+
+def prepare_memory(config: dict, names: Sequence[str] | None, question: str | None) -> Prepared:
+    no_question(question)
+    system, conversations = load_memory(config)
+    variants = {n: build_memory(n, config, system) for n in names or MEMORY_VARIANTS}
+    return Prepared(
+        items=conversations,
+        variants=variants,
+        payload=lambda conversation: conversation,
+        score=memory_scoring.score,
+        label=lambda row: row["conversation"],
+        good=lambda row: row["right"],
+        title="Conversation memory bench",
+        columns=memory_scoring.SUMMARY_COLUMNS,
+        cells=lambda rows: [
+            memory_scoring.summary_cells(line) for line in memory_scoring.summarize(rows)
+        ],
+        markdown=memory_scoring.summary_markdown,
+        row_key="conversation",
+        item_key=lambda conversation: conversation.id,
     )
 
 
@@ -180,5 +234,6 @@ CASES = {
         Case("agent", runs=20, prefix="", prepare=prepare_agent),
         Case("prompt", runs=1, prefix="prompt-", prepare=prepare_prompt),
         Case("parsing", runs=1, prefix="parsing-", prepare=prepare_parsing),
+        Case("memory", runs=1, prefix="memory-", prepare=prepare_memory),
     )
 }
