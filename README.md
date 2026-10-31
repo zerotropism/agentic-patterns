@@ -1,8 +1,8 @@
 # agentic-patterns
 
 The same agentic use cases, each implemented three ways, side by side: by hand with the Ollama
-client, with LangChain 1.x, and with an MCP server. Two cases so far: an agent with tools, and a
-structured prompt. Each one is measured by the same bench.
+client, with LangChain 1.x, and with an MCP server. Three cases so far: an agent with tools, a
+structured prompt, and typed parsing. Each one is measured by the same bench.
 
 The point is not which one wins. It is what you have to write, what the framework writes for
 you, and whether that changes the outcome.
@@ -20,6 +20,8 @@ uv run agentic-patterns run combined --variant raw
 uv run agentic-patterns bench                     # agent: every variant, every question, 20 runs
 uv run agentic-patterns classify --variant mcp    # structured prompt: one product
 uv run agentic-patterns bench --case prompt       # structured prompt: 100 products
+uv run agentic-patterns extract --variant mcp     # typed parsing: one listing
+uv run agentic-patterns bench --case parsing      # typed parsing: 100 listings
 ```
 
 The model comes from `config.yaml` and can be overridden per run:
@@ -292,6 +294,104 @@ What it shows:
 So, for a structured prompt, the choice between the three is not about the answers: they are
 the same. It is about what checks the template (`langchain`), and where it lives (`mcp`).
 
+## Typed parsing
+
+### The task
+
+Read the five figures of a product listing into a typed object:
+
+```python
+class Listing(BaseModel):
+    actual_price: float      # price before discount, in rupees
+    discounted_price: float  # price after discount
+    discount_percent: int    # 0 to 100
+    rating: float            # 0 to 5
+    rating_count: int        # 0 or more
+```
+
+The field names are the columns of `data/amazon.csv`; each field carries a description. The
+listings are written from those columns, so every field has an exact reference: 100 products
+drawn with a fixed seed, in four phrasings taken in turn, 25 each.
+
+| phrasing | example |
+|---|---|
+| `was_now` | `… Was ₹5,890, now ₹2,599 (56% off). Rated 4.1 out of 5 by 21,783 customers.` |
+| `deal` | `Deal of the day: … for just ₹664 instead of ₹1,490, that is 55% less. 925 ratings, 4.1/5 on average.` |
+| `plain` | `… \| List price: Rs 999 \| Offer price: Rs 379 \| You save 62 percent \| 4.3 stars from 3096 reviews` |
+| `sheet` | `Product: …` then `MRP: INR 2,995`, `Selling price: INR 1,625`, `Discount: 46%`, `Rating: 4.5 (23,484 ratings)`, one per line |
+
+### The three variants
+
+| | how the type is enforced | who validates |
+|---|---|---|
+| `raw` | Ollama's `format=` with the JSON schema of `Listing` | `Listing.model_validate_json`, by hand |
+| `langchain` | `with_structured_output(Listing)`; its default method, `json_schema`, sends the same `format=` request as `raw` | the framework |
+| `mcp` | a tool, `record_listing`, whose parameters are the fields of `Listing`, with the same types, bounds and descriptions | FastMCP, before the tool runs: a rating of 7 is refused |
+
+One model call per listing in all three, with no second chance after a validation error. An
+answer that does not validate counts as wrong on every field.
+
+### Results
+
+Measured on 30 and 31 October 2026, temperature 0, `think: false`, 100 listings, one run per
+listing and variant:
+
+| model | variant | valid | all fields | actual | discounted | discount | rating | count |
+|---|---|---|---|---|---|---|---|---|
+| `llama3.2:3b` | raw | 100 | 94 | 98 | 100 | 100 | 100 | 96 |
+| `llama3.2:3b` | langchain | 100 | 94 | 98 | 100 | 100 | 100 | 96 |
+| `llama3.2:3b` | mcp | 100 | 95 | 98 | 100 | 100 | 100 | 97 |
+| `qwen3.5:4b-mlx` | raw | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+| `qwen3.5:4b-mlx` | langchain | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+| `qwen3.5:4b-mlx` | mcp | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
+
+`raw` and `langchain` from `summary-parsing-20261031T151143Z.md` and `…T151528Z.md`, `mcp` from
+`summary-parsing-20261030T160723Z.md` and `…T161333Z.md`; the `mcp` variant did not change
+between the two days.
+
+### What `raw` and `langchain` needed
+
+The first measurement, on 30 October, sent the instructions alone:
+
+| model | variant | all fields | actual | discounted |
+|---|---|---|---|---|
+| `llama3.2:3b` | raw | 89 | 92 | 99 |
+| `llama3.2:3b` | langchain | 90 | 93 | 99 |
+| `qwen3.5:4b-mlx` | raw | 3 | 3 | 84 |
+| `qwen3.5:4b-mlx` | langchain | 3 | 3 | 84 |
+
+`qwen3.5:4b-mlx` put the price actually paid in `actual_price`: in 83 answers of 100 the two
+prices were equal, and in the `deal` phrasing, which gives the discounted price first, it
+swapped them. The same model, given the same schema as a tool, got every field right.
+
+`format=` constrains what the model writes to the schema; it does not show the schema to the
+model, which sees each key only as it is made to write it, and never its description. A tool's
+schema, descriptions included, is part of the prompt. The same 20 listings, sent four ways:
+
+| condition | `qwen3.5:4b-mlx`, actual right | `llama3.2:3b`, actual right |
+|---|---|---|
+| `format=`, instructions alone | 0/20 | 19/20 |
+| `format=`, the schema written after the instructions | 20/20 | 19/20 |
+| `format=`, fields renamed `list_price` and `offer_price` | 20/20 | 19/20 |
+| a tool with the same schema | 20/20 | 19/20 |
+
+Writing the schema in the prompt, or naming the fields so that their name says it all, each fixes
+it. `raw` and `langchain` now write the schema after the instructions (`with_schema` in
+`patterns/parsing/task.py`); `schema_in_prompt: false` in `config.yaml` reproduces the first
+measurement. `with_structured_output` does not do this for you either: it builds the `format=`
+request, not the prompt.
+
+What it shows:
+
+- Once the model sees the schema, the three ways of getting a typed object give the same
+  answers: 100/100 for `qwen3.5:4b-mlx`, 94 or 95 for `llama3.2:3b`, whose remaining errors are
+  mostly the number of ratings.
+- All 1,000 answers of the two measurements validated against the type, in all three variants.
+  Constrained output and argument validation both guarantee the shape; neither guarantees the
+  meaning.
+- A field's description only helps if it reaches the model. With `format=`, it does not, and the
+  field's name is all there is.
+
 ## Structure
 
 ```
@@ -309,6 +409,13 @@ src/agentic_patterns/
 │   ├── with_langchain.py  ChatPromptTemplate, few-shot template
 │   ├── with_mcp.py        FastMCP prompt, fetched with get_prompt
 │   └── scoring.py         format, category, confusion
+├── patterns/parsing/
+│   ├── task.py            Listing, the four phrasings, the schema in the prompt
+│   ├── raw.py             format= and model_validate_json
+│   ├── with_langchain.py  with_structured_output
+│   ├── with_mcp.py        a tool whose parameters are the fields
+│   └── scoring.py         validity, field by field
+├── cases.py          the use cases the bench can run
 ├── bench.py          the interleaved run loop, agent scoring, Wilson intervals
 ├── rendering.py      tables
 └── cli.py            cyclopts commands
@@ -317,7 +424,7 @@ evaluation/           bench outcomes and summaries, one pair per measurement
 
 Adding a variant means adding a class with a `name` and an `async run`, plus one line in its
 case's `__init__.py`. Adding a use case means a sibling package under `patterns/`, with its own
-scoring, run by the same loop.
+scoring, and one entry in `cases.py`; the bench command and its loop do not change.
 
 An agent holds a client bound to the running event loop, so it must be built and used inside a
 single `asyncio.run`. The CLI does that; a script that calls `asyncio.run` once per question
@@ -336,7 +443,9 @@ settings included. If they diverge, the comparison measures the request instead 
 Two more check that the LangChain variant binds the same descriptions and reports a failing tool
 to the model, and two keep its out-of-the-box behaviour documented (`framework_defaults=True`).
 For the structured prompt, the three variants are checked to build the same messages and send
-the same request, and the scoring to keep format and category apart.
+the same request, and the scoring to keep format and category apart. For typed parsing, `raw`
+and `langchain` are checked to send the same messages and schema, and the MCP tool's schema to
+match `Listing` field by field.
 
 ## History
 
