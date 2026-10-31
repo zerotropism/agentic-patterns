@@ -1,13 +1,11 @@
 """Terminal output for run results."""
 
 from collections.abc import Sequence
-from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from agentic_patterns.bench import SUMMARY_COLUMNS, summary_cells
 from agentic_patterns.models import RunResult
 
 console = Console()
@@ -32,7 +30,3 @@ def render_table(title: str, columns: Sequence[str], rows: Sequence[Sequence[str
     for row in rows:
         table.add_row(*(escape(cell) for cell in row))
     console.print(table)
-
-
-def render_bench(lines: Sequence[dict[str, Any]]) -> None:
-    render_table("Agent bench", SUMMARY_COLUMNS, [summary_cells(line) for line in lines])
