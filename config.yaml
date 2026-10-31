@@ -65,3 +65,17 @@ prompt:
   user: |
     Product: {name}
     Description: {description}
+
+# The typed parsing case: read the five figures of a product listing into a typed object.
+# The listings are written from the file's columns in four phrasings, taken in turn.
+parsing:
+  data: data/amazon.csv
+  products: 100
+  seed: 11
+  name_chars: 100
+  instructions: >
+    Read the figures of this product listing: the price before discount, the price after
+    discount, the discount in percent, the average rating out of 5 and the number of ratings.
+  # raw and langchain constrain the answer with format=, which does not show the schema to
+  # the model: true writes it after the instructions. false reproduces the 30 October run.
+  schema_in_prompt: true
