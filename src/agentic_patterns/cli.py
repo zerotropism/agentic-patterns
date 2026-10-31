@@ -7,20 +7,22 @@ from cyclopts import App, Parameter
 from rich.markup import escape
 
 from agentic_patterns import bench as benchmark
-from agentic_patterns.config import (
-    configured_questions,
-    generation_settings,
-    load_config,
-    model_name,
+from agentic_patterns.cases import (
+    CASES,
+    CaseError,
+    build_agent,
+    build_classifier,
+    build_parser,
+    select_questions,
 )
-from agentic_patterns.models import Question
+from agentic_patterns.config import generation_settings, load_config, model_name
 from agentic_patterns.patterns.agent import VARIANTS
-from agentic_patterns.patterns.prompt import VARIANTS as PROMPT_VARIANTS
-from agentic_patterns.patterns.prompt import scoring as prompt_scoring
-from agentic_patterns.patterns.prompt.task import PromptSpec, load_task
-from agentic_patterns.protocols import Pattern
-from agentic_patterns.rendering import console, render_bench, render_result, render_table
+from agentic_patterns.patterns.parsing.task import load_task as load_parsing
+from agentic_patterns.patterns.prompt.task import load_task as load_prompt
+from agentic_patterns.rendering import console, render_result, render_table
 from agentic_patterns.tools import TOOLS
+
+__all__ = ["app", "build_agent", "build_classifier", "build_parser", "select_questions"]
 
 app = App(
     name="agentic-patterns",
@@ -28,45 +30,8 @@ app = App(
     version="0.1.0",
 )
 
-CASES = ("agent", "prompt")
-# The agent questions are few and each one is worth repeating; the prompt case has a
-# hundred products, and repeating them at temperature 0 adds little
-DEFAULT_RUNS = {"agent": 20, "prompt": 1}
-
 Variant = Annotated[str, Parameter(help=f"One of: {', '.join(VARIANTS)}.")]
 ConfigPath = Annotated[str | None, Parameter(help="Path to the YAML configuration.")]
-
-
-def build_agent(variant: str, config: dict) -> Pattern:
-    """Build one variant, with the model and sampling settings every variant shares.
-
-    Agents are reused across questions: they hold a client.
-    """
-    if variant not in VARIANTS:
-        raise ValueError(f"Unknown variant '{variant}'. Use one of: {sorted(VARIANTS)}.")
-    return VARIANTS[variant](
-        model_name(config),
-        config["agent"]["system_prompt"],
-        settings=generation_settings(config),
-    )
-
-
-def build_classifier(variant: str, config: dict, spec: PromptSpec) -> Pattern:
-    """One variant of the structured prompt case, with the shared model and settings."""
-    if variant not in PROMPT_VARIANTS:
-        raise ValueError(f"Unknown variant '{variant}'. Use one of: {sorted(PROMPT_VARIANTS)}.")
-    return PROMPT_VARIANTS[variant](model_name(config), spec, settings=generation_settings(config))
-
-
-def select_questions(config: dict, name: str | None) -> list[Question]:
-    """Named question from the configuration, all of them, or a literal question.
-
-    A literal question has nothing to check against: run answers it, bench refuses it.
-    """
-    configured = configured_questions(config)
-    if name is None:
-        return list(configured.values())
-    return [configured.get(name, Question(name=name, text=name))]
 
 
 def questions_from(config: dict, name: str | None) -> list[str]:
@@ -99,7 +64,7 @@ async def classify(
 ) -> None:
     """Classify one product of the prompt case's sample, by id; the first one by default."""
     loaded = load_config(config)
-    spec, sample = load_task(loaded)
+    spec, sample = load_prompt(loaded)
     chosen = next((p for p in sample if p.id == product), None) if product else sample[0]
     if chosen is None:
         console.print(f"{escape(product or '')} is not in the sample.")
@@ -110,9 +75,32 @@ async def classify(
     console.print(escape(result.answer))
 
 
+@app.command
+async def extract(
+    listing: str | None = None,
+    *,
+    variant: Variant = "raw",
+    config: ConfigPath = None,
+) -> None:
+    """Parse one listing of the parsing case, by product id; the first one by default."""
+    loaded = load_config(config)
+    instructions, items = load_parsing(loaded)
+    chosen = next((i for i in items if i.id == listing), None) if listing else items[0]
+    if chosen is None:
+        console.print(f"{escape(listing or '')} is not in the sample.")
+        raise SystemExit(1)
+    result = await build_parser(variant, loaded, instructions).run(chosen)
+    console.print(
+        f"[bold]{result.variant}[/bold] — {chosen.phrasing}, {result.duration_seconds:.1f}s"
+    )
+    console.print(escape(chosen.text))
+    console.print(f"  [dim]expected {chosen.truth.model_dump_json()}[/dim]")
+    console.print(escape(result.answer))
+
+
 Runs = Annotated[
     int | None,
-    Parameter(help="How many times to run each item per variant: 20 for agent, 1 for prompt."),
+    Parameter(help="How many times to run each item per variant: 20 for agent, 1 otherwise."),
 ]
 Variants = Annotated[
     list[str] | None, Parameter(help="Variants to bench, all by default.", consume_multiple=True)
@@ -134,85 +122,55 @@ async def bench(
     """Run every variant of a use case, score each run, write the results.
 
     Outcomes are written one line per run as they come, in outcomes-<stamp>.jsonl
-    (outcomes-prompt-<stamp>.jsonl for the prompt case); the summary, with 95% intervals
-    on the rates, in the matching summary file next to it.
+    (outcomes-<case>-<stamp>.jsonl for the cases other than agent); the summary, with 95%
+    intervals on the rates, in the matching summary file next to it.
     """
     if case not in CASES:
         console.print(f"Unknown case '{escape(case)}'. Use one of: {', '.join(CASES)}.")
         raise SystemExit(1)
+    chosen = CASES[case]
     loaded = load_config(config)
-    runs = runs or DEFAULT_RUNS[case]
+    try:
+        prepared = chosen.prepare(loaded, variants, question)
+    except CaseError as exc:
+        console.print(escape(str(exc)))
+        raise SystemExit(1) from exc
+    runs = runs or chosen.runs
     model, settings = model_name(loaded), generation_settings(loaded)
-
-    if case == "agent":
-        items = select_questions(loaded, question)
-        unchecked = [q.name for q in items if not q.checked]
-        if unchecked:
-            console.print(f"No tools or expect configured for: {escape(', '.join(unchecked))}.")
-            raise SystemExit(1)
-        variants_built = {n: build_agent(n, loaded) for n in variants or list(VARIANTS)}
-        prefix = ""
-    else:
-        if question:
-            console.print("--question applies to the agent case only.")
-            raise SystemExit(1)
-        spec, items = load_task(loaded)
-        variants_built = {
-            n: build_classifier(n, loaded, spec) for n in variants or list(PROMPT_VARIANTS)
-        }
-        prefix = "prompt-"
 
     directory = Path(output)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = benchmark.timestamp()
-    sink = benchmark.JsonlSink(directory / f"outcomes-{prefix}{stamp}.jsonl", model)
-    total = runs * len(items) * len(variants_built)
+    sink = benchmark.JsonlSink(directory / f"outcomes-{chosen.prefix}{stamp}.jsonl", model)
+    total = runs * len(prepared.items) * len(prepared.variants)
 
     def progress(row: dict) -> None:
         sink(row)
-        if case == "agent":
-            label, good = row["question"], row["tools_ok"] and row["answer_ok"]
-        else:
-            label, good = row["product"], row["format_ok"] and row["category_ok"]
-        mark = "ok" if good else row["error"] or repr(row["answer"][:40])
+        mark = "ok" if prepared.good(row) else row["error"] or repr(row["answer"][:40])
         console.print(
-            f"[dim]{sink.count}/{total}[/dim] {row['variant']} {label}: {escape(mark)}",
+            f"[dim]{sink.count}/{total}[/dim] {row['variant']} {prepared.label(row)}: "
+            f"{escape(mark)}",
             highlight=False,
         )
 
     console.print(f"{model}, {case} case, {runs} runs, {total} in all. Warming up.")
     try:
-        if case == "agent":
-            rows = await benchmark.run_bench(variants_built, items, runs, timeout, progress)
-        else:
-            rows = await benchmark.run_interleaved(
-                variants_built,
-                items,
-                runs,
-                timeout,
-                payload=lambda product: product,
-                score=lambda result, error, product, name, run: prompt_scoring.score(
-                    result, error, product, name, run, spec.categories
-                ),
-                sink=progress,
-            )
+        rows = await benchmark.run_interleaved(
+            prepared.variants,
+            prepared.items,
+            runs,
+            timeout,
+            payload=prepared.payload,
+            score=prepared.score,
+            sink=progress,
+        )
     except RuntimeError as exc:
         console.print(escape(str(exc)))
         raise SystemExit(1) from exc
 
-    if case == "agent":
-        summary = benchmark.write_outputs(rows, directory, stamp, model, settings, runs)
-        render_bench(benchmark.summarize(rows))
-    else:
-        summary = directory / f"summary-prompt-{stamp}.md"
-        summary.write_text(
-            prompt_scoring.summary_markdown(rows, spec.categories, model, settings, runs, stamp)
-        )
-        render_table(
-            "Structured prompt bench",
-            prompt_scoring.SUMMARY_COLUMNS,
-            [prompt_scoring.summary_cells(line) for line in prompt_scoring.summarize(rows)],
-        )
+    summary = directory / f"summary-{chosen.prefix}{stamp}.md"
+    summary.write_text(prepared.markdown(rows, model, settings, runs, stamp))
+    render_table(prepared.title, prepared.columns, prepared.cells(rows))
     console.print(f"{sink.path}\n{summary}")
 
 

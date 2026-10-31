@@ -104,3 +104,16 @@ def test_classify_refuses_a_product_outside_the_sample() -> None:
     with pytest.raises(SystemExit) as exit_info:
         app(["classify", "NOT-A-PRODUCT"])
     assert exit_info.value.code == 1
+
+
+def test_extract_refuses_a_listing_outside_the_sample() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        app(["extract", "NOT-A-PRODUCT"])
+    assert exit_info.value.code == 1
+
+
+def test_an_unknown_variant_is_reported_before_any_call(tmp_path) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        app(["bench", "--case", "parsing", "--variants", "nope", "--output", str(tmp_path)])
+    assert exit_info.value.code == 1
+    assert not list(tmp_path.iterdir())
