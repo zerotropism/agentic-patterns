@@ -56,3 +56,5 @@ class RunResult:
     tool_calls: list[ToolCall] = field(default_factory=list)
     model_calls: int = 0
     duration_seconds: float = 0.0
+    # Tokens of the last prompt sent, as Ollama counted them; only the memory case uses it
+    prompt_tokens: int | None = None

@@ -79,3 +79,14 @@ parsing:
   # raw and langchain constrain the answer with format=, which does not show the schema to
   # the model: true writes it after the instructions. false reproduces the 30 October run.
   schema_in_prompt: true
+
+# The conversation memory case: a fact at the first turn, the question at the last, and in
+# between unrelated questions and one distractor, the same kind of fact about someone else.
+# The model answers every turn; only the last answer is scored.
+memory:
+  system: >
+    You are the assistant of an online shop. Answer in one or two short sentences.
+  # Turns between the fact and the question, the distractor included
+  distances: [1, 3, 6]
+  per_distance: 12
+  seed: 5
