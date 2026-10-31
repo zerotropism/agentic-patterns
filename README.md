@@ -302,11 +302,11 @@ Read the five figures of a product listing into a typed object:
 
 ```python
 class Listing(BaseModel):
-    actual_price: float      # price before discount, in rupees
+    actual_price: float  # price before discount, in rupees
     discounted_price: float  # price after discount
-    discount_percent: int    # 0 to 100
-    rating: float            # 0 to 5
-    rating_count: int        # 0 or more
+    discount_percent: int  # 0 to 100
+    rating: float  # 0 to 5
+    rating_count: int  # 0 or more
 ```
 
 The field names are the columns of `data/amazon.csv`; each field carries a description. The
