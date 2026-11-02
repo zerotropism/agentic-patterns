@@ -23,6 +23,10 @@ from agentic_patterns.patterns.prompt import VARIANTS as PROMPT_VARIANTS
 from agentic_patterns.patterns.prompt import scoring as prompt_scoring
 from agentic_patterns.patterns.prompt.task import PromptSpec
 from agentic_patterns.patterns.prompt.task import load_task as load_prompt
+from agentic_patterns.patterns.rag import VARIANTS as RAG_VARIANTS
+from agentic_patterns.patterns.rag import scoring as rag_scoring
+from agentic_patterns.patterns.rag.task import RagTask
+from agentic_patterns.patterns.rag.task import load_task as load_rag
 from agentic_patterns.protocols import Pattern
 
 Rows = Sequence[dict[str, Any]]
@@ -86,6 +90,13 @@ def build_memory(variant: str, config: dict, system: str) -> Pattern:
     """One variant of the conversation memory case, with the shared model and settings."""
     return pick(MEMORY_VARIANTS, variant)(
         model_name(config), system, settings=generation_settings(config)
+    )
+
+
+def build_rag(variant: str, config: dict, task: RagTask) -> Pattern:
+    """One variant of the RAG case, with the shared model, settings and index."""
+    return pick(RAG_VARIANTS, variant)(
+        model_name(config), task, settings=generation_settings(config)
     )
 
 
@@ -228,6 +239,28 @@ def prepare_memory(config: dict, names: Sequence[str] | None, question: str | No
     )
 
 
+def prepare_rag(config: dict, names: Sequence[str] | None, question: str | None) -> Prepared:
+    no_question(question)
+    task, questions = load_rag(config)
+    variants = {n: build_rag(n, config, task) for n in names or RAG_VARIANTS}
+    return Prepared(
+        items=questions,
+        variants=variants,
+        payload=lambda q: q,
+        score=rag_scoring.score,
+        label=lambda row: row["question"],
+        good=lambda row: row["right"],
+        title="RAG bench",
+        columns=rag_scoring.SUMMARY_COLUMNS,
+        cells=lambda rows: [
+            rag_scoring.summary_cells(line) for line in rag_scoring.summarize(rows)
+        ],
+        markdown=rag_scoring.summary_markdown,
+        row_key="question",
+        item_key=lambda q: q.id,
+    )
+
+
 CASES = {
     case.name: case
     for case in (
@@ -235,5 +268,6 @@ CASES = {
         Case("prompt", runs=1, prefix="prompt-", prepare=prepare_prompt),
         Case("parsing", runs=1, prefix="parsing-", prepare=prepare_parsing),
         Case("memory", runs=1, prefix="memory-", prepare=prepare_memory),
+        Case("rag", runs=1, prefix="rag-", prepare=prepare_rag),
     )
 }
