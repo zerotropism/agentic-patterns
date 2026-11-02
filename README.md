@@ -84,9 +84,11 @@ Tool calls that returned an error are counted apart, since a run can recover fro
 question without checks cannot be benched: `bench --question "..."` is refused.
 
 A run that answers right without calling the tool is the case the system prompt forbids, which
-is why the two counts are kept apart. Variants are interleaved, their order rotates from one
-question and run to the next, and one warm-up run per variant is discarded. A run that raises or exceeds the
-timeout counts as failed. Each outcome is written as it happens to `evaluation/outcomes-*.jsonl`;
+is why the two counts are kept apart. Variants are interleaved: at each step every variant
+takes a different question, so that two consecutive calls never send the same prompt and
+Ollama's prompt cache favours none, and their order rotates from one step and run to the next.
+One warm-up run per variant is discarded. A run that raises or exceeds the timeout counts as
+failed. Each outcome is written as it happens to `evaluation/outcomes-*.jsonl`;
 the summary, rates with their 95% Wilson interval, goes to `evaluation/summary-*.md`.
 
 What a question checks lives next to it in `config.yaml`:
