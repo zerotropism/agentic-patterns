@@ -263,7 +263,17 @@ def rescore(
     loaded = load_config(config)
     prepared = CASES[case].prepare(loaded, None, None)
     items = {prepared.item_key(item): item for item in prepared.items}
+    position = {key: index for index, key in enumerate(items)}
+    variants = {name: index for index, name in enumerate(prepared.variants)}
     stored = [json.loads(line) for line in source.read_text().splitlines() if line.strip()]
+    # The file is in the order played; the summary wants item order, then variant order
+    stored.sort(
+        key=lambda row: (
+            row["run"],
+            position[row[prepared.row_key]],
+            variants.get(row["variant"], len(variants)),
+        )
+    )
     rows = [
         prepared.score(
             restore(row), row.get("error"), items[row[prepared.row_key]], row["variant"], row["run"]

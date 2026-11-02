@@ -155,6 +155,41 @@ def test_rescore_scores_a_stored_run_again(tmp_path) -> None:
     assert (tmp_path / "summary-memory-20261031T160544Z-rescored.md").is_file()
 
 
+def test_rescore_puts_rows_played_out_of_order_back_in_item_order(tmp_path) -> None:
+    import json
+
+    from agentic_patterns.patterns.memory.task import load_task
+
+    conversations = load_task(load_config())[1][:2]
+    played = [(conversations[1], "langchain"), (conversations[0], "raw"), (conversations[1], "raw")]
+    rows = [
+        {
+            "model": "m",
+            "run": 0,
+            "variant": variant,
+            "conversation": conversation.id,
+            "answer": "",
+            "model_calls": 1,
+            "seconds": 1.0,
+            "error": None,
+        }
+        for conversation, variant in played
+    ]
+    source = tmp_path / "outcomes-memory-20261102T100000Z.jsonl"
+    source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    with pytest.raises(SystemExit):
+        app(["rescore", str(source), "--case", "memory"])
+
+    (rescored,) = tmp_path.glob("outcomes-memory-20261102T100000Z-rescored.jsonl")
+    order = [json.loads(line) for line in rescored.read_text().splitlines()]
+    assert [(row["conversation"], row["variant"]) for row in order] == [
+        (conversations[0].id, "raw"),
+        (conversations[1].id, "raw"),
+        (conversations[1].id, "langchain"),
+    ]
+
+
 def test_rescore_refuses_the_agent_case(tmp_path) -> None:
     source = tmp_path / "outcomes-20261029T143717Z.jsonl"
     source.write_text("")
