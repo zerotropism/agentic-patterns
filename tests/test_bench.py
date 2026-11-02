@@ -10,8 +10,10 @@ import pytest
 from agentic_patterns.bench import (
     JsonlSink,
     answer_ok,
+    phases,
     rotated,
     run_bench,
+    run_interleaved,
     schedule,
     score,
     summarize,
@@ -128,6 +130,21 @@ def test_two_consecutive_calls_never_share_an_item(variants: int) -> None:
         assert all(a != b for a, b in pairwise(calls)), items
 
 
+@pytest.mark.parametrize(("variants", "items"), [(1, 1), (3, 1), (3, 4), (3, 6), (3, 60), (3, 100)])
+def test_no_item_comes_twice_between_two_reloads(variants: int, items: int) -> None:
+    cut = phases(variants, items, runs=2)
+    assert all(len({i for _, _, i in phase}) == len(phase) for phase in cut)
+    played = sorted(call for phase in cut for call in phase)
+    assert played == sorted(
+        (r, k, i) for r in range(2) for k in range(variants) for i in range(items)
+    )
+
+
+def test_a_run_takes_one_phase_per_variant_when_items_divide_evenly() -> None:
+    assert len(phases(3, 60, runs=1)) == 3
+    assert len(phases(3, 6, runs=20)) == 60
+
+
 def test_every_variant_still_comes_first_in_turn() -> None:
     firsts = [schedule(3, 6, run)[0][0] for run in range(3)]
     assert sorted(firsts) == [0, 1, 2]
@@ -169,6 +186,34 @@ async def test_every_run_is_scored_and_sent_to_the_sink() -> None:
     assert {row["variant"]: row["answer_ok"] for row in rows} == {"good": True, "wrong": False}
     # one warm-up run each, not scored
     assert agents["good"].calls == 4
+
+
+async def test_the_cache_is_emptied_before_each_phase_never_during_a_run() -> None:
+    events = []
+
+    class Recording(FakeAgent):
+        async def run(self, question: str) -> RunResult:
+            events.append(self.name)
+            return await super().run(question)
+
+    async def reset() -> None:
+        events.append("reset")
+
+    agents = {name: Recording(name) for name in ("a", "b", "c")}
+    items = [f"q{i}" for i in range(6)]
+    await run_interleaved(
+        agents,
+        items,
+        runs=1,
+        timeout=5,
+        payload=lambda item: item,
+        score=lambda result, error, item, name, run: {"item": item, "variant": name},
+        sink=lambda _: None,
+        warmup=False,
+        reset=reset,
+    )
+    assert events.count("reset") == 3 and events[0] == "reset"
+    assert len(events) == 3 + 18
 
 
 async def test_a_failing_run_is_recorded_not_raised() -> None:

@@ -173,15 +173,9 @@ def schedule(variants: int, items: int, run: int) -> list[tuple[int, int]]:
     """The (variant, item) pairs of one run, in the order they are played.
 
     At each step every variant takes a different item: variant k is on item
-    (step + k * shift) mod items, shift spreading the variants across the list. Two
-    consecutive calls are therefore never on the same item, so a variant never meets a
-    prompt the previous call just left in Ollama's cache, which made the second of two
-    identical prompts two to three times faster in the RAG bench. The order of the variants
-    within a step still rotates, so that none always comes first.
-
-    Checked from one to three variants and up to 200 items, two consecutive calls share an
-    item only with five items or fewer; with one item, as bench --question gives, every
-    call does.
+    (step + k * shift) mod items, shift spreading the variants across the list, so two
+    consecutive calls are not on the same item. The order of the variants within a step
+    rotates, so that none always comes first.
     """
     shift = max(1, items // variants)
     pairs = []
@@ -189,6 +183,32 @@ def schedule(variants: int, items: int, run: int) -> list[tuple[int, int]]:
         for k in rotated(list(range(variants)), run + step):
             pairs.append((k, (step + k * shift) % items))
     return pairs
+
+
+def phases(variants: int, items: int, runs: int) -> list[list[tuple[int, int, int]]]:
+    """Every (run, variant, item) of the bench, cut into phases in which no item comes twice.
+
+    The model is reloaded before each phase, which empties Ollama's prompt cache: no run then
+    finds in it what another run on the same item left. Spacing identical prompts out is not
+    enough: with llama3.2:3b, a prompt sent 60 calls earlier was still answered three times
+    faster. Within a run, the model calls of an agent and the turns of a conversation still
+    share their prefix, as they would in use.
+    With the order schedule() gives, a run takes about as many phases as there are
+    variants; with one item, as bench --question gives, every call is a phase.
+    """
+    cut: list[list[tuple[int, int, int]]] = []
+    for run in range(runs):
+        current: list[tuple[int, int, int]] = []
+        seen: set[int] = set()
+        for k, index in schedule(variants, items, run):
+            if index in seen:
+                cut.append(current)
+                current, seen = [], set()
+            current.append((run, k, index))
+            seen.add(index)
+        if current:
+            cut.append(current)
+    return cut
 
 
 async def run_interleaved(
@@ -200,25 +220,30 @@ async def run_interleaved(
     score: Score,
     sink: Callable[[dict[str, Any]], None],
     warmup: bool = True,
+    reset: Callable[[], Awaitable[None]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Every item, every variant, runs times, in the order schedule() gives. Each outcome
-    goes to sink as soon as it exists, so an interrupted bench keeps what it measured; the
-    rows returned are in item order, then variant order, whatever the order played.
+    """Every item, every variant, runs times, phase by phase as phases() gives them. Each
+    outcome goes to sink as soon as it exists, so an interrupted bench keeps what it
+    measured; the rows returned are in item order, then variant order, whatever the order
+    played.
 
-    payload turns an item into what the variants run on; score turns a run into a row.
+    payload turns an item into what the variants run on; score turns a run into a row;
+    reset, awaited before each phase and not measured, empties the model's prompt cache.
     """
     names = list(variants)
     played: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
 
     if warmup and items:
-        # Loads the model; not measured
+        # Loads the model and the frameworks; not measured
         first = payload(items[0])
         errors = [(await attempt(lambda n=n: variants[n].run(first), timeout))[1] for n in names]
         if all(errors):
             raise RuntimeError(f"Every warm-up run failed, nothing to measure: {errors[0]}")
 
-    for run in range(runs):
-        for k, index in schedule(len(names), len(items), run):
+    for phase in phases(len(names), len(items), runs):
+        if reset is not None:
+            await reset()
+        for run, k, index in phase:
             name, item = names[k], items[index]
             given = payload(item)
             result, error = await attempt(lambda n=name, g=given: variants[n].run(g), timeout)
