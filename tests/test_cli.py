@@ -161,3 +161,9 @@ def test_rescore_refuses_the_agent_case(tmp_path) -> None:
     with pytest.raises(SystemExit) as exit_info:
         app(["rescore", str(source), "--case", "agent"])
     assert exit_info.value.code == 1
+
+
+def test_ask_refuses_a_question_outside_the_sample() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        app(["ask", "nope"])
+    assert exit_info.value.code == 1

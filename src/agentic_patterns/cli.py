@@ -16,6 +16,7 @@ from agentic_patterns.cases import (
     build_classifier,
     build_memory,
     build_parser,
+    build_rag,
     restore,
     select_questions,
 )
@@ -24,6 +25,7 @@ from agentic_patterns.patterns.agent import VARIANTS
 from agentic_patterns.patterns.memory.task import load_task as load_memory
 from agentic_patterns.patterns.parsing.task import load_task as load_parsing
 from agentic_patterns.patterns.prompt.task import load_task as load_prompt
+from agentic_patterns.patterns.rag.task import load_task as load_rag
 from agentic_patterns.rendering import console, render_result, render_table
 from agentic_patterns.tools import TOOLS
 
@@ -33,6 +35,7 @@ __all__ = [
     "build_classifier",
     "build_memory",
     "build_parser",
+    "build_rag",
     "select_questions",
 ]
 
@@ -133,6 +136,29 @@ async def converse(
     for turn in chosen.turns:
         console.print(f"  [dim]user:[/dim] {escape(turn)}")
     console.print(f"  [dim]expected {chosen.expected}, not {chosen.distractor}[/dim]")
+    console.print(escape(result.answer))
+
+
+@app.command
+async def ask(
+    question: str | None = None,
+    *,
+    variant: Variant = "raw",
+    config: ConfigPath = None,
+) -> None:
+    """Ask one question of the RAG case, by id; the first one by default."""
+    loaded = load_config(config)
+    task, questions = load_rag(loaded)
+    chosen = next((q for q in questions if q.id == question), None) if question else questions[0]
+    if chosen is None:
+        console.print(f"{escape(question or '')} is not in the sample.")
+        raise SystemExit(1)
+    result = await build_rag(variant, loaded, task).run(chosen)
+    console.print(f"[bold]{result.variant}[/bold] — {chosen.id}, {result.duration_seconds:.1f}s")
+    console.print(escape(chosen.text))
+    for call in result.tool_calls:
+        console.print(f"  [dim]search {escape(str(call.arguments))} -> {escape(call.result)}[/dim]")
+    console.print(f"  [dim]expected {escape(chosen.answer)}, from {chosen.document}[/dim]")
     console.print(escape(result.answer))
 
 

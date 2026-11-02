@@ -1,8 +1,8 @@
 # agentic-patterns
 
 The same agentic use cases, each implemented three ways, side by side: by hand with the Ollama
-client, with LangChain 1.x, and with an MCP server. Four cases so far: an agent with tools, a
-structured prompt, typed parsing and conversation memory. Each one is measured by the same
+client, with LangChain 1.x, and with an MCP server. Five cases so far: an agent with tools, a
+structured prompt, typed parsing, conversation memory and RAG. Each one is measured by the same
 bench.
 
 The point is not which one wins. It is what you have to write, what the framework writes for
@@ -25,6 +25,8 @@ uv run agentic-patterns extract --variant mcp     # typed parsing: one listing
 uv run agentic-patterns bench --case parsing      # typed parsing: 100 listings
 uv run agentic-patterns converse --variant mcp    # memory: one conversation
 uv run agentic-patterns bench --case memory       # memory: 36 conversations
+uv run agentic-patterns ask --variant mcp         # RAG: one question
+uv run agentic-patterns bench --case rag          # RAG: 60 questions
 ```
 
 The model comes from `config.yaml` and can be overridden per run:
@@ -478,6 +480,94 @@ What it shows:
 - Distance does not matter at this size: from 140 to 330 tokens, memory is not what limits
   either model.
 
+## RAG
+
+### The task
+
+Answer a question about one product of a catalogue of a thousand, `data/clothing.csv`. The
+questions are written from what a description states in a fixed form, and name the product:
+
+| kind | example | reference |
+|---|---|---|
+| weight | How much does the Maine Woodsman's Tote Bag weigh? | 1 lb. 9 oz |
+| origin | Where is the Premium Two-Strap Leather Belt made? | England |
+
+The reference comes from a `Weight:` line, an `Approx. weight:` phrase, or a `Made in` phrase of
+the product's description.
+
+60 questions, 30 of each kind, drawn with a fixed seed among products whose name is unique.
+The search is the same BM25 for the three variants (k1 1.5, b 0.75, as in `local-rag`), three
+results per search.
+
+### The three variants
+
+| | who searches | with what query | model calls |
+|---|---|---|---|
+| `raw` | the code, before the model | the question | 1 |
+| `langchain` | a `BaseRetriever` over the same BM25, in an LCEL chain | the question | 1 |
+| `mcp` | the model, through a FastMCP tool `search(query)` | one the model writes | 2 or more |
+
+`raw` and `langchain` are pipelines and send the same request, by test. `mcp` is agentic RAG:
+the search is a tool, the loop is the agent case's. Its tool returns the model the same blocks
+`raw` puts in its prompt.
+
+### Bench
+
+`agentic-patterns bench --case rag` asks each question once per variant and scores:
+
+- found: the reference document is among the results of a search the run made;
+- right: the answer states the fact. A weight needs every figure with its unit (1 lb. 1 oz.
+  needs 1 lb and 1 oz; "1 pound 1 ounce" counts), a country the country, USA under its usual
+  names;
+- right, not found: right without the reference document, so not from retrieval.
+
+### Results
+
+Measured on 2 November 2026, temperature 0, `think: false`, one run per question and variant
+(`summary-rag-20261102T105526Z.md` and `…T110015Z.md`):
+
+| model | variant | found | right | right, not found | calls | prompt tokens | s median |
+|---|---|---|---|---|---|---|---|
+| `llama3.2:3b` | raw | 60/60 | 60/60 | 0 | 1 | 626 | 1.7 |
+| `llama3.2:3b` | langchain | 60/60 | 60/60 | 0 | 1 | 626 | 1.7 |
+| `llama3.2:3b` | mcp | 54/60 | 52/60 | 0 | 2 | 915 | 2.4 |
+| `qwen3.5:4b-mlx` | raw | 60/60 | 58/60 | 0 | 1 | 652 | 2.2 |
+| `qwen3.5:4b-mlx` | langchain | 60/60 | 57/60 | 0 | 1 | 652 | 2.3 |
+| `qwen3.5:4b-mlx` | mcp | 60/60 | 58/60 | 0 | 2 | 1,308 | 3.9 |
+
+The summary files give `langchain` a median of 0.6 s and 1.1 s. That is Ollama's prompt cache,
+not the chain: `raw` and `langchain` send the same prompt, and in the bench's rotating order
+`langchain` runs right after `raw` two times in three, when the prompt is already processed.
+Taken apart, its runs right after `raw` have a median of 0.5 s (`llama3.2:3b`) and 0.9 s
+(`qwen3.5:4b-mlx`); its other runs 1.73 s and 2.26 s, against 1.70 s and 2.23 s for `raw`. The
+table gives those.
+
+What the misses are:
+
+- `llama3.2:3b` with `mcp`: in 6 of 8, the query was `Men` or `Women`, the product's name cut
+  at its apostrophe, and the document was not found. Whether the model or the parsing of its
+  tool call cuts it is not established. Of the two others, one answer did not see "Weight:
+  3.3 lb." next to "Load Capacity: 55 lb.", and one said "American-made", which the scoring,
+  strict, does not count as USA.
+- `qwen3.5:4b-mlx`: 4 of its 7 misses answer "Maine" where the reference says USA, the
+  description saying both: right, more precise than the reference, counted wrong. Two others
+  read "Fabric is made in Connecticut" and concluded the product's origin was not given,
+  although the same description says "Made in the USA". The last one, with `langchain`, named
+  other products; `raw`, with the same request, got it right.
+
+What it shows:
+
+- With the question as the query, BM25 finds the document every time: product names are
+  distinctive, and the question contains the name. Letting the model write the query can only
+  lose here, and with `llama3.2:3b` it does, 6 times in 60. `qwen3.5:4b-mlx` writes the
+  product's name as its query, apostrophe and all ("Men's Northern Woods Hunting Boots, 10"
+  Gore-Tex/Thinsulate"), and loses nothing.
+- Agentic RAG costs a second model call, 1.4 to 2 times the prompt tokens, and 0.7 to 1.7 s per
+  question. It pays when the question is not a good query, which these questions are.
+- No answer was right without the document: neither model knew or guessed these facts.
+- A bench that runs variants with identical prompts one after the other measures Ollama's cache
+  for whichever comes second. Latency between `raw` and `langchain` has to be read with that.
+
 ## Structure
 
 ```
@@ -507,6 +597,12 @@ src/agentic_patterns/
 │   ├── with_langchain.py  create_agent and a LangGraph checkpointer
 │   ├── with_mcp.py        a FastMCP server holding the history
 │   └── scoring.py         right, distractor, by distance
+├── patterns/rag/
+│   ├── task.py            catalogue, BM25, questions from the descriptions
+│   ├── raw.py             search, then one call
+│   ├── with_langchain.py  a BaseRetriever in an LCEL chain
+│   ├── with_mcp.py        a search tool the model calls
+│   └── scoring.py         found, right, right without the document
 ├── cases.py          the use cases the bench can run
 ├── bench.py          the interleaved run loop, agent scoring, Wilson intervals
 ├── rendering.py      tables
@@ -538,7 +634,9 @@ For the structured prompt, the three variants are checked to build the same mess
 the same request, and the scoring to keep format and category apart. For typed parsing, `raw`
 and `langchain` are checked to send the same messages and schema, and the MCP tool's schema to
 match `Listing` field by field. For conversation memory, the three variants are checked to send
-the same history at every turn, and two runs never to share one.
+the same history at every turn, and two runs never to share one. For RAG, `raw` and `langchain`
+are checked to send the same request, and `mcp` to pass the model's own query to the search and
+the same blocks back.
 
 `agentic-patterns rescore <outcomes> --case <case>` scores a stored run again after a change in
 a scorer. The agent case is excluded: its expected date is the day of the run.
