@@ -169,6 +169,28 @@ def rotated(names: Sequence[str], turn: int) -> list[str]:
 Score = Callable[[RunResult | None, str | None, Any, str, int], dict[str, Any]]
 
 
+def schedule(variants: int, items: int, run: int) -> list[tuple[int, int]]:
+    """The (variant, item) pairs of one run, in the order they are played.
+
+    At each step every variant takes a different item: variant k is on item
+    (step + k * shift) mod items, shift spreading the variants across the list. Two
+    consecutive calls are therefore never on the same item, so a variant never meets a
+    prompt the previous call just left in Ollama's cache, which made the second of two
+    identical prompts two to three times faster in the RAG bench. The order of the variants
+    within a step still rotates, so that none always comes first.
+
+    Checked from one to three variants and up to 200 items, two consecutive calls share an
+    item only with five items or fewer; with one item, as bench --question gives, every
+    call does.
+    """
+    shift = max(1, items // variants)
+    pairs = []
+    for step in range(items):
+        for k in rotated(list(range(variants)), run + step):
+            pairs.append((k, (step + k * shift) % items))
+    return pairs
+
+
 async def run_interleaved(
     variants: Mapping[str, Pattern],
     items: Sequence[Any],
@@ -179,31 +201,31 @@ async def run_interleaved(
     sink: Callable[[dict[str, Any]], None],
     warmup: bool = True,
 ) -> list[dict[str, Any]]:
-    """Every item, every variant, runs times. The variants take turns on each item, in an
-    order that shifts from one item and run to the next. Each outcome goes to sink as soon
-    as it exists, so an interrupted bench keeps what it measured.
+    """Every item, every variant, runs times, in the order schedule() gives. Each outcome
+    goes to sink as soon as it exists, so an interrupted bench keeps what it measured; the
+    rows returned are in item order, then variant order, whatever the order played.
 
     payload turns an item into what the variants run on; score turns a run into a row.
     """
     names = list(variants)
-    rows: list[dict[str, Any]] = []
+    played: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
 
     if warmup and items:
-        # Loads the model and fills the prompt cache; not measured
+        # Loads the model; not measured
         first = payload(items[0])
         errors = [(await attempt(lambda n=n: variants[n].run(first), timeout))[1] for n in names]
         if all(errors):
             raise RuntimeError(f"Every warm-up run failed, nothing to measure: {errors[0]}")
 
     for run in range(runs):
-        for index, item in enumerate(items):
+        for k, index in schedule(len(names), len(items), run):
+            name, item = names[k], items[index]
             given = payload(item)
-            for name in rotated(names, run + index):
-                result, error = await attempt(lambda n=name, g=given: variants[n].run(g), timeout)
-                row = score(result, error, item, name, run)
-                rows.append(row)
-                sink(row)
-    return rows
+            result, error = await attempt(lambda n=name, g=given: variants[n].run(g), timeout)
+            row = score(result, error, item, name, run)
+            played.append(((run, index, k), row))
+            sink(row)
+    return [row for _, row in sorted(played, key=lambda pair: pair[0])]
 
 
 async def run_bench(

@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import date
+from itertools import pairwise
 
 import pytest
 
@@ -11,6 +12,7 @@ from agentic_patterns.bench import (
     answer_ok,
     rotated,
     run_bench,
+    schedule,
     score,
     summarize,
     summary_markdown,
@@ -111,6 +113,26 @@ def test_the_variant_order_rotates() -> None:
     assert [rotated(["a", "b", "c"], run)[0] for run in range(4)] == ["a", "b", "c", "a"]
 
 
+@pytest.mark.parametrize("variants", [1, 2, 3])
+@pytest.mark.parametrize("items", [6, 7, 36, 60, 100])
+def test_each_run_plays_every_pair_once(variants: int, items: int) -> None:
+    every = sorted((k, i) for k in range(variants) for i in range(items))
+    assert all(sorted(schedule(variants, items, run)) == every for run in range(3))
+
+
+@pytest.mark.parametrize("variants", [1, 2, 3])
+def test_two_consecutive_calls_never_share_an_item(variants: int) -> None:
+    # Ollama's prompt cache would favour the second; across runs too
+    for items in range(6, 201):
+        calls = [i for run in range(3) for _, i in schedule(variants, items, run)]
+        assert all(a != b for a, b in pairwise(calls)), items
+
+
+def test_every_variant_still_comes_first_in_turn() -> None:
+    firsts = [schedule(3, 6, run)[0][0] for run in range(3)]
+    assert sorted(firsts) == [0, 1, 2]
+
+
 class FakeAgent:
     def __init__(self, name: str, answer: str = "1018022", fail: bool = False) -> None:
         self.name = name
@@ -143,7 +165,7 @@ async def test_every_run_is_scored_and_sent_to_the_sink() -> None:
     seen = []
     rows = await run_bench(agents, [MATH], runs=3, timeout=5, sink=seen.append, today=DAY)
 
-    assert rows == seen and len(rows) == 6
+    assert len(rows) == 6 and sorted(rows, key=repr) == sorted(seen, key=repr)
     assert {row["variant"]: row["answer_ok"] for row in rows} == {"good": True, "wrong": False}
     # one warm-up run each, not scored
     assert agents["good"].calls == 4
