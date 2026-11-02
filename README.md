@@ -85,9 +85,10 @@ question without checks cannot be benched: `bench --question "..."` is refused.
 
 A run that answers right without calling the tool is the case the system prompt forbids, which
 is why the two counts are kept apart. Variants are interleaved: at each step every variant
-takes a different question, so that two consecutive calls never send the same prompt and
-Ollama's prompt cache favours none, and their order rotates from one step and run to the next.
-One warm-up run per variant is discarded. A run that raises or exceeds the timeout counts as
+takes a different question, and their order rotates from one step and run to the next. The
+bench is cut into phases in which no question comes twice, and the model is reloaded before
+each phase: Ollama's prompt cache, which can keep a prompt for dozens of calls, then gives no
+run the work of another (`--no-reload` keeps it). One warm-up run per variant is discarded. A run that raises or exceeds the timeout counts as
 failed. Each outcome is written as it happens to `evaluation/outcomes-*.jsonl`;
 the summary, rates with their 95% Wilson interval, goes to `evaluation/summary-*.md`.
 
