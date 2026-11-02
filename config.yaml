@@ -90,3 +90,22 @@ memory:
   distances: [1, 3, 6]
   per_distance: 12
   seed: 5
+
+# The RAG case: questions about one product of data/clothing.csv, a thousand products.
+# The questions are written from the weight or the country of manufacture a description
+# states, and name the product. The search is BM25 in all three variants.
+rag:
+  data: data/clothing.csv
+  per_kind: 30
+  seed: 3
+  k: 3
+  # raw and langchain: the search runs first, its results come with the question
+  instructions: >
+    You answer questions about the products of an outdoor clothing shop, using only the
+    product descriptions given with the question. If they do not contain the answer, say so.
+    Answer in one sentence.
+  # mcp: the model calls the search tool itself, with a query of its own
+  agent_instructions: >
+    You answer questions about the products of an outdoor clothing shop. Use the search
+    tool to find the product descriptions, and answer only from what it returns. If they do
+    not contain the answer, say so. Answer in one sentence.
