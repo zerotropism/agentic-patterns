@@ -256,20 +256,26 @@ matrix per variant. Files: `evaluation/outcomes-prompt-*.jsonl` and `summary-pro
 
 ### Results
 
-Measured on 30 October 2026, temperature 0, `think: false`, 100 products, one run per product
-and variant (`summary-prompt-20261030T104607Z.md` and `summary-prompt-20261030T104716Z.md`):
+Measured on 3 November 2026, temperature 0, `think: false`, 100 products, one run per product
+and variant, the model reloaded between phases (`summary-prompt-20261103T090452Z.md` and
+`…T091920Z.md`):
 
 | model | variant | format ok | category ok | s median | s p90 |
 |---|---|---|---|---|---|
-| `llama3.2:3b` | raw | 100/100 | 67/100 | 0.1 | 0.5 |
-| `llama3.2:3b` | langchain | 100/100 | 67/100 | 0.1 | 0.5 |
-| `llama3.2:3b` | mcp | 100/100 | 67/100 | 0.1 | 0.5 |
-| `qwen3.5:4b-mlx` | raw | 100/100 | 86/100 | 0.3 | 0.7 |
-| `qwen3.5:4b-mlx` | langchain | 100/100 | 85/100 | 0.3 | 0.8 |
-| `qwen3.5:4b-mlx` | mcp | 100/100 | 85/100 | 0.3 | 0.7 |
+| `llama3.2:3b` | raw | 100/100 | 67/100 | 0.4 | 0.6 |
+| `llama3.2:3b` | langchain | 100/100 | 67/100 | 0.4 | 0.5 |
+| `llama3.2:3b` | mcp | 100/100 | 67/100 | 0.4 | 0.5 |
+| `qwen3.5:4b-mlx` | raw | 100/100 | 86/100 | 0.7 | 0.9 |
+| `qwen3.5:4b-mlx` | langchain | 100/100 | 86/100 | 0.7 | 0.9 |
+| `qwen3.5:4b-mlx` | mcp | 100/100 | 86/100 | 0.7 | 0.8 |
+
+The first measurement, on 30 October, gave medians of 0.1 s and 0.3 s: the three variants ran
+one after the other on each product, and two of them found the prompt already processed in
+Ollama's cache (see [Ollama's prompt cache](#ollamas-prompt-cache)). The rates were the same,
+but for one product.
 
 Where the errors are, true category in rows, category named in columns, the same for the three
-variants except one product:
+variants:
 
 | `llama3.2:3b` | Electronics | Computers&Accessories | Home&Kitchen | OfficeProducts |
 |---|---|---|---|---|
@@ -280,18 +286,18 @@ variants except one product:
 
 | `qwen3.5:4b-mlx` | Electronics | Computers&Accessories | Home&Kitchen | OfficeProducts |
 |---|---|---|---|---|
-| Electronics | 12 or 13 | 11 or 12 | 1 | 0 |
+| Electronics | 13 | 11 | 1 | 0 |
 | Computers&Accessories | 0 | 25 | 0 | 0 |
 | Home&Kitchen | 0 | 0 | 25 | 0 |
 | OfficeProducts | 0 | 2 | 0 | 23 |
 
 What it shows:
 
-- The three variants send the same request and get the same answers: identical on all 100
-  products with `llama3.2:3b`; with `qwen3.5:4b-mlx`, one Electronics product named Electronics
-  by `raw` and Computers&Accessories by the other two. Their requests are identical by test, so
-  that one product is the model not being strictly deterministic at temperature 0, as one run in
-  360 was in the agent bench.
+- The three variants send the same request and get the same answers, on all 100 products, with
+  both models. In the first measurement, one Electronics product was named Electronics by `raw`
+  and Computers&Accessories by `langchain` and `mcp`, which ran right after it on that product;
+  with the model reloaded, all three name it Electronics. What looked like the model not being
+  deterministic at temperature 0 was the cache.
 - The format is solved by the examples: no answer of 600 had anything around the category.
 - The errors sit on one boundary, Electronics against Computers&Accessories, in opposite
   directions: `llama3.2:3b` calls half the computer accessories electronics, `qwen3.5:4b-mlx`
@@ -341,8 +347,9 @@ answer that does not validate counts as wrong on every field.
 
 ### Results
 
-Measured on 30 and 31 October 2026, temperature 0, `think: false`, 100 listings, one run per
-listing and variant:
+Measured on 3 November 2026, temperature 0, `think: false`, 100 listings, one run per listing
+and variant, the model reloaded between phases (`summary-parsing-20261103T090713Z.md` and
+`…T092300Z.md`):
 
 | model | variant | valid | all fields | actual | discounted | discount | rating | count |
 |---|---|---|---|---|---|---|---|---|
@@ -353,9 +360,8 @@ listing and variant:
 | `qwen3.5:4b-mlx` | langchain | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
 | `qwen3.5:4b-mlx` | mcp | 100 | 100 | 100 | 100 | 100 | 100 | 100 |
 
-`raw` and `langchain` from `summary-parsing-20261031T151143Z.md` and `…T151528Z.md`, `mcp` from
-`summary-parsing-20261030T160723Z.md` and `…T161333Z.md`; the `mcp` variant did not change
-between the two days.
+The rates are those of the measurements of 30 and 31 October, made before the reload, and
+`raw` and `langchain` have the same verdicts as then, listing by listing.
 
 ### What `raw` and `langchain` needed
 
@@ -448,34 +454,37 @@ of the last prompt as Ollama counted it, and the time per conversation, every tu
 
 ### Results
 
-Measured on 31 October 2026, temperature 0, `think: false`, one run per conversation and
-variant (`summary-memory-20261031T160544Z-rescored.md` and `…T161200Z-rescored.md`):
+Measured on 3 November 2026, temperature 0, `think: false`, one run per conversation and
+variant, the model reloaded between phases (`summary-memory-20261103T091325Z.md` and
+`…T093908Z.md`):
 
 | model | variant | distance 1 | distance 3 | distance 6 | all | distractor | last prompt, tokens | s median |
 |---|---|---|---|---|---|---|---|---|
-| `llama3.2:3b` | raw | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.2 |
-| `llama3.2:3b` | langchain | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.3 |
-| `llama3.2:3b` | mcp | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.4 |
-| `qwen3.5:4b-mlx` | raw | 12/12 | 11/12 | 11/12 | 34/36 | 0 | 143, 204, 310 | 4.6 |
-| `qwen3.5:4b-mlx` | langchain | 11/12 | 11/12 | 9/12 | 31/36 | 0 | 142, 204, 313 | 4.8 |
-| `qwen3.5:4b-mlx` | mcp | 12/12 | 10/12 | 10/12 | 32/36 | 0 | 142, 206, 310 | 4.6 |
+| `llama3.2:3b` | raw | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.1 |
+| `llama3.2:3b` | langchain | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.0 |
+| `llama3.2:3b` | mcp | 12/12 | 12/12 | 12/12 | 36/36 | 0 | 161, 230, 330 | 3.1 |
+| `qwen3.5:4b-mlx` | raw | 12/12 | 10/12 | 10/12 | 32/36 | 0 | 142, 206, 310 | 4.9 |
+| `qwen3.5:4b-mlx` | langchain | 12/12 | 10/12 | 10/12 | 32/36 | 0 | 140, 206, 310 | 5.3 |
+| `qwen3.5:4b-mlx` | mcp | 11/12 | 10/12 | 10/12 | 31/36 | 0 | 140, 206, 310 | 5.1 |
 
-The first scoring missed a plural: "deliveries on Tuesdays" did not count as Tuesday. Scored
-again with `agentic-patterns rescore`, from the answers already stored, without calling a
-model; the first summaries are kept next to the rescored ones.
+The first measurement, on 31 October, gave `qwen3.5:4b-mlx` 34, 31 and 32 conversations right;
+6 verdicts of 108 changed from one measurement to the other, in both directions. The first
+scoring had also missed a plural: "deliveries on Tuesdays" did not count as Tuesday. Those runs
+were scored again with `agentic-patterns rescore`, from the answers already stored, without
+calling a model; the first summaries are kept next to the rescored ones.
 
-What the misses are, all from `qwen3.5:4b-mlx`:
+What the misses are, all from `qwen3.5:4b-mlx`, of two kinds:
 
-- several days, the right one among them: "Tuesday, Wednesday, and Friday", 5 answers;
+- several days, the right one among them: "Tuesday, Thursday, and Saturday";
 - no answer: "Your dog's name isn't mentioned in our conversation yet", "I don't know where
-  you live", 6 answers.
+  you live".
 
 What it shows:
 
-- No answer of the 216 gave the distractor alone. The history always reached the model, and the
+- No answer of the 432, over both measurements, gave the distractor alone. The history always reached the model, and the
   model never took someone else's fact for the user's.
 - The variants differ only through the model. The size of `qwen3.5:4b-mlx`'s last prompt varies
-  by one to three tokens from one variant to another: one of its earlier answers was not word
+  by up to three tokens from one variant to another: one of its earlier answers was not word
   for word the same, and the rest of the conversation inherited it. The code sends what it is
   given, by test; at temperature 0, the model does not always give the same. With
   `llama3.2:3b`, whose answers were the same, the three variants are identical down to the
@@ -598,7 +607,40 @@ Sofa is made, `qwen3.5:4b-mlx` with `langchain`, right after `raw` on the same q
 answered about other products of the search results; `raw`, which ran first, answered right,
 and so did `langchain` with the model reloaded. At temperature 0, a prompt read from the cache
 need not give the answer the same prompt gives computed afresh. The structured prompt, typed
-parsing and conversation memory cases were measured before the reload, in the first order.
+parsing and conversation memory cases were measured again with the reload; the agent case was
+not.
+
+## Limits of the measures
+
+What the tables can say, and what they cannot:
+
+- One machine, two small models. Every figure comes from one Apple Silicon Mac running
+  Ollama, `llama3.2:3b` on its default engine, `qwen3.5:4b-mlx` on MLX. A larger model,
+  another runtime or a GPU server can change rates and latencies alike.
+- Small samples. 100 products, 100 listings, 36 conversations, 60 questions, and 6 agent
+  questions run 20 times. The 95% intervals are wide: 67/100 is 0.57 to 0.75, 32/36 is 0.75
+  to 0.96. A difference of one to three items between variants lies within them and is not
+  read as a difference.
+- One run per item, except in the agent case, and temperature 0 is not determinism. The same
+  request gave another answer with another state of Ollama's cache, on one question in the RAG
+  bench and one product in the structured prompt bench; from one memory measurement to the
+  next, 6 verdicts of 108 changed with `qwen3.5:4b-mlx`.
+- Latency is wall-clock time on a machine in ordinary use, not isolated. It is compared between
+  the variants of one measurement, which alternate call by call, not from one measurement to
+  another. Model loading is excluded, and the cache is emptied between phases: the figures are
+  those of a prompt the model has not seen. Within a run, an agent's calls and a
+  conversation's turns still share their prefix, as they would in use.
+- The references are the data's. The categories are the shop's own, loose between Electronics
+  and Computers&Accessories; the listings and conversations come from templates; the RAG
+  references are read from the descriptions and scored strictly, so that "Maine" is not USA.
+  Part of what is counted as error is the reference.
+- The frameworks are measured as set up here, each variant made to send the model the same
+  request as `raw`. Their defaults differ, and the sections say where: LangChain's handling of
+  tool errors and docstrings, the schema Ollama's `format=` does not show the model. Out of the
+  box, the scores differ too.
+- The agent case was measured before the model reload, the three variants one after the other
+  on each question. Its rates rest on 20 runs per question and variant; its latencies may hold
+  cache hits.
 
 ## Structure
 
