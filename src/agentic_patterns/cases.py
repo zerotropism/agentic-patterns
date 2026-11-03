@@ -13,6 +13,9 @@ from agentic_patterns import bench
 from agentic_patterns.config import configured_questions, generation_settings, model_name
 from agentic_patterns.models import GenerationSettings, Question, RunResult, ToolCall
 from agentic_patterns.patterns.agent import VARIANTS as AGENT_VARIANTS
+from agentic_patterns.patterns.judge import VARIANTS as JUDGE_VARIANTS
+from agentic_patterns.patterns.judge import scoring as judge_scoring
+from agentic_patterns.patterns.judge.task import load_task as load_judge
 from agentic_patterns.patterns.memory import VARIANTS as MEMORY_VARIANTS
 from agentic_patterns.patterns.memory import scoring as memory_scoring
 from agentic_patterns.patterns.memory.task import load_task as load_memory
@@ -97,6 +100,13 @@ def build_rag(variant: str, config: dict, task: RagTask) -> Pattern:
     """One variant of the RAG case, with the shared model, settings and index."""
     return pick(RAG_VARIANTS, variant)(
         model_name(config), task, settings=generation_settings(config)
+    )
+
+
+def build_judge(variant: str, config: dict, prompts: dict[str, str]) -> Pattern:
+    """One variant of the LLM-as-judge case, with the shared model and settings."""
+    return pick(JUDGE_VARIANTS, variant)(
+        model_name(config), prompts, settings=generation_settings(config)
     )
 
 
@@ -261,6 +271,28 @@ def prepare_rag(config: dict, names: Sequence[str] | None, question: str | None)
     )
 
 
+def prepare_judge(config: dict, names: Sequence[str] | None, question: str | None) -> Prepared:
+    no_question(question)
+    prompts, judgements = load_judge(config)
+    variants = {n: build_judge(n, config, prompts) for n in names or JUDGE_VARIANTS}
+    return Prepared(
+        items=judgements,
+        variants=variants,
+        payload=lambda judgement: judgement,
+        score=judge_scoring.score,
+        label=lambda row: row["judgement"],
+        good=lambda row: row["right"],
+        title="LLM-as-judge bench",
+        columns=judge_scoring.SUMMARY_COLUMNS,
+        cells=lambda rows: [
+            judge_scoring.summary_cells(line) for line in judge_scoring.summarize(rows)
+        ],
+        markdown=judge_scoring.summary_markdown,
+        row_key="judgement",
+        item_key=lambda judgement: judgement.id,
+    )
+
+
 CASES = {
     case.name: case
     for case in (
@@ -269,5 +301,6 @@ CASES = {
         Case("parsing", runs=1, prefix="parsing-", prepare=prepare_parsing),
         Case("memory", runs=1, prefix="memory-", prepare=prepare_memory),
         Case("rag", runs=1, prefix="rag-", prepare=prepare_rag),
+        Case("judge", runs=1, prefix="judge-", prepare=prepare_judge),
     )
 }
