@@ -526,24 +526,17 @@ the search is a tool, the loop is the agent case's. Its tool returns the model t
 
 ### Results
 
-Measured on 2 November 2026, temperature 0, `think: false`, one run per question and variant
-(`summary-rag-20261102T105526Z.md` and `…T110015Z.md`):
+Measured on 2 November 2026, temperature 0, `think: false`, one run per question and variant,
+the model reloaded between phases (`summary-rag-20261102T165347Z.md` and `…T165954Z.md`):
 
 | model | variant | found | right | right, not found | calls | prompt tokens | s median |
 |---|---|---|---|---|---|---|---|
-| `llama3.2:3b` | raw | 60/60 | 60/60 | 0 | 1 | 626 | 1.7 |
-| `llama3.2:3b` | langchain | 60/60 | 60/60 | 0 | 1 | 626 | 1.7 |
-| `llama3.2:3b` | mcp | 54/60 | 52/60 | 0 | 2 | 915 | 2.4 |
-| `qwen3.5:4b-mlx` | raw | 60/60 | 58/60 | 0 | 1 | 652 | 2.2 |
-| `qwen3.5:4b-mlx` | langchain | 60/60 | 57/60 | 0 | 1 | 652 | 2.3 |
-| `qwen3.5:4b-mlx` | mcp | 60/60 | 58/60 | 0 | 2 | 1,308 | 3.9 |
-
-The summary files give `langchain` a median of 0.6 s and 1.1 s. That is Ollama's prompt cache,
-not the chain: `raw` and `langchain` send the same prompt, and in the bench's rotating order
-`langchain` runs right after `raw` two times in three, when the prompt is already processed.
-Taken apart, its runs right after `raw` have a median of 0.5 s (`llama3.2:3b`) and 0.9 s
-(`qwen3.5:4b-mlx`); its other runs 1.73 s and 2.26 s, against 1.70 s and 2.23 s for `raw`. The
-table gives those.
+| `llama3.2:3b` | raw | 60/60 | 60/60 | 0 | 1 | 626 | 1.8 |
+| `llama3.2:3b` | langchain | 60/60 | 60/60 | 0 | 1 | 626 | 1.8 |
+| `llama3.2:3b` | mcp | 54/60 | 52/60 | 0 | 2 | 915 | 2.3 |
+| `qwen3.5:4b-mlx` | raw | 60/60 | 58/60 | 0 | 1 | 652 | 2.4 |
+| `qwen3.5:4b-mlx` | langchain | 60/60 | 58/60 | 0 | 1 | 652 | 2.4 |
+| `qwen3.5:4b-mlx` | mcp | 60/60 | 58/60 | 0 | 2 | 1,308 | 3.8 |
 
 What the misses are:
 
@@ -552,11 +545,11 @@ What the misses are:
   tool call cuts it is not established. Of the two others, one answer did not see "Weight:
   3.3 lb." next to "Load Capacity: 55 lb.", and one said "American-made", which the scoring,
   strict, does not count as USA.
-- `qwen3.5:4b-mlx`: 4 of its 7 misses answer "Maine" where the reference says USA, the
-  description saying both: right, more precise than the reference, counted wrong. Two others
-  read "Fabric is made in Connecticut" and concluded the product's origin was not given,
-  although the same description says "Made in the USA". The last one, with `langchain`, named
-  other products; `raw`, with the same request, got it right.
+- `qwen3.5:4b-mlx`: 4 of its 6 misses answer "Maine" where the reference says USA, the
+  description saying both: right, more precise than the reference, counted wrong. The two
+  others, `raw` and `langchain` on the same product, read "Fabric is made in Connecticut" and
+  concluded the product's origin was not given, although the same description says "Made in
+  the USA".
 
 What it shows:
 
@@ -565,11 +558,47 @@ What it shows:
   lose here, and with `llama3.2:3b` it does, 6 times in 60. `qwen3.5:4b-mlx` writes the
   product's name as its query, apostrophe and all ("Men's Northern Woods Hunting Boots, 10"
   Gore-Tex/Thinsulate"), and loses nothing.
-- Agentic RAG costs a second model call, 1.4 to 2 times the prompt tokens, and 0.7 to 1.7 s per
-  question. It pays when the question is not a good query, which these questions are.
+- Agentic RAG costs a second model call, 1.5 to 2 times the prompt tokens, and 0.5 to 1.4 s per
+  question. It pays when the question makes a poor query; these questions make good ones.
 - No answer was right without the document: neither model knew or guessed these facts.
-- A bench that runs variants with identical prompts one after the other measures Ollama's cache
-  for whichever comes second. Latency between `raw` and `langchain` has to be read with that.
+- Once the cache is out of the way, `raw` and `langchain` have the same rates, the same misses
+  and the same latency: the chain adds nothing measurable to a model call of two seconds.
+- A bench whose variants send identical prompts measures Ollama's cache for whichever comes
+  second, even 60 calls later, and can see its answers change. Reloading the model between
+  phases is what made the comparison fair.
+
+### Ollama's prompt cache
+
+It took three measurements to get those latencies. Ollama keeps the prompts it has processed
+and answers one it has already seen faster; `raw` and `langchain` send the same prompt. Median
+seconds per question, `raw` / `langchain`:
+
+| order of the calls | files | `llama3.2:3b` | `qwen3.5:4b-mlx` |
+|---|---|---|---|
+| the three variants on one question, one after the other | `…T105526Z`, `…T110015Z` | 1.7 / 0.6 | 2.2 / 1.1 |
+| each variant on a different question at each step | `…T150305Z`, `…T150803Z` | 0.6 / 1.5 | 2.4 / 2.4 |
+| the same, the model reloaded between phases | `…T165347Z`, `…T165954Z` | 1.8 / 1.8 | 2.4 / 2.4 |
+
+- First order: `langchain` ran right after `raw` on two questions in three, and found the
+  prompt processed.
+- Second order: no two consecutive calls share a question. That was enough for
+  `qwen3.5:4b-mlx`, not for `llama3.2:3b`: there, `raw` and `langchain` meet each question 20
+  steps, 60 calls, apart, and whichever comes second is still three times faster. Which one
+  comes second follows from the schedule: `raw` on the 30 origin questions and 10 weight
+  questions, `langchain` on the other 20 weight questions. The medians by kind follow it: 0.5 s
+  for `raw` on origin against 1.7 s for `langchain`, 1.0 s for `langchain` on weight against
+  1.6 s for `raw`. Why Ollama keeps prompts that long for one model and not for the other, the
+  runs do not say.
+- Third order: the bench is cut into phases in which no question comes twice, and the model is
+  unloaded and loaded again before each. `raw` and `langchain` are then within 0.1 s on every
+  kind of question, for both models.
+
+The cache changed an answer too. In the first measurement, asked where the Buckingham Leather
+Sofa is made, `qwen3.5:4b-mlx` with `langchain`, right after `raw` on the same question,
+answered about other products of the search results; `raw`, which ran first, answered right,
+and so did `langchain` with the model reloaded. At temperature 0, a prompt read from the cache
+need not give the answer the same prompt gives computed afresh. The structured prompt, typed
+parsing and conversation memory cases were measured before the reload, in the first order.
 
 ## Structure
 
