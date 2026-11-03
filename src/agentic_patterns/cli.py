@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Annotated
 
+import ollama
 from cyclopts import App, Parameter
 from rich.markup import escape
 
@@ -26,6 +27,7 @@ from agentic_patterns.patterns.memory.task import load_task as load_memory
 from agentic_patterns.patterns.parsing.task import load_task as load_parsing
 from agentic_patterns.patterns.prompt.task import load_task as load_prompt
 from agentic_patterns.patterns.rag.task import load_task as load_rag
+from agentic_patterns.reload import reload_model
 from agentic_patterns.rendering import console, render_result, render_table
 from agentic_patterns.tools import TOOLS
 
@@ -181,6 +183,10 @@ async def bench(
     variants: Variants = None,
     timeout: Annotated[float, Parameter(help="Seconds before a run counts as failed.")] = 120.0,
     output: Annotated[str, Parameter(help="Directory for outcomes and summary.")] = "evaluation",
+    reload: Annotated[
+        bool,
+        Parameter(help="Reload the model between phases, emptying its prompt cache."),
+    ] = True,
     config: ConfigPath = None,
 ) -> None:
     """Run every variant of a use case, score each run, write the results.
@@ -217,6 +223,10 @@ async def bench(
             highlight=False,
         )
 
+    async def reset() -> None:
+        console.print("[dim]Reloading the model[/dim]")
+        await reload_model(model)
+
     console.print(f"{model}, {case} case, {runs} runs, {total} in all. Warming up.")
     try:
         rows = await benchmark.run_interleaved(
@@ -227,8 +237,9 @@ async def bench(
             payload=prepared.payload,
             score=prepared.score,
             sink=progress,
+            reset=reset if reload else None,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, TimeoutError, ollama.ResponseError) as exc:
         console.print(escape(str(exc)))
         raise SystemExit(1) from exc
 
@@ -263,7 +274,17 @@ def rescore(
     loaded = load_config(config)
     prepared = CASES[case].prepare(loaded, None, None)
     items = {prepared.item_key(item): item for item in prepared.items}
+    position = {key: index for index, key in enumerate(items)}
+    variants = {name: index for index, name in enumerate(prepared.variants)}
     stored = [json.loads(line) for line in source.read_text().splitlines() if line.strip()]
+    # The file is in the order played; the summary wants item order, then variant order
+    stored.sort(
+        key=lambda row: (
+            row["run"],
+            position[row[prepared.row_key]],
+            variants.get(row["variant"], len(variants)),
+        )
+    )
     rows = [
         prepared.score(
             restore(row), row.get("error"), items[row[prepared.row_key]], row["variant"], row["run"]
