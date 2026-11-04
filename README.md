@@ -1,9 +1,9 @@
 # agentic-patterns
 
 The same agentic use cases, each implemented three ways, side by side: by hand with the Ollama
-client, with LangChain 1.x, and with an MCP server. Five cases so far: an agent with tools, a
-structured prompt, typed parsing, conversation memory and RAG. Each one is measured by the same
-bench.
+client, with LangChain 1.x, and with an MCP server. Six cases: an agent with tools, a
+structured prompt, typed parsing, conversation memory, RAG and an LLM as judge. Each one is
+measured by the same bench.
 
 The point is not which one wins. It is what you have to write, what the framework writes for
 you, and whether that changes the outcome.
@@ -27,6 +27,8 @@ uv run agentic-patterns converse --variant mcp    # memory: one conversation
 uv run agentic-patterns bench --case memory       # memory: 36 conversations
 uv run agentic-patterns ask --variant mcp         # RAG: one question
 uv run agentic-patterns bench --case rag          # RAG: 60 questions
+uv run agentic-patterns judge --variant mcp       # judge: one pair, in one order
+uv run agentic-patterns bench --case judge        # judge: 200 pairs, both orders
 ```
 
 The model comes from `config.yaml` and can be overridden per run:
@@ -481,8 +483,8 @@ What the misses are, all from `qwen3.5:4b-mlx`, of two kinds:
 
 What it shows:
 
-- No answer of the 432, over both measurements, gave the distractor alone. The history always reached the model, and the
-  model never took someone else's fact for the user's.
+- No answer of the 432, over both measurements, gave the distractor alone. The history always
+  reached the model, and the model never took someone else's fact for the user's.
 - The variants differ only through the model. The size of `qwen3.5:4b-mlx`'s last prompt varies
   by up to three tokens from one variant to another: one of its earlier answers was not word
   for word the same, and the rest of the conversation inherited it. The code sends what it is
@@ -610,6 +612,87 @@ need not give the answer the same prompt gives computed afresh. The structured p
 parsing and conversation memory cases were measured again with the reload; the agent case was
 not.
 
+## LLM as judge
+
+### The task
+
+Say which of two outputs better follows an instruction. The pairs come from
+[LLMBar](https://github.com/princeton-nlp/LLMBar) (Zeng et al., 2023, MIT licence, in
+`data/LLMBAR-LICENSE`), whose authors set which output is objectively the better one:
+
+- natural: 100 pairs from existing preference sets, checked by the authors;
+- adversarial: pairs built so that the worse output looks good, in four sets (`neighbor`,
+  `gptinst`, `gptout`, `manual`); 25 of each, drawn with a fixed seed.
+
+Each pair is judged twice, the outputs swapped the second time: 400 verdicts per variant, and a
+judge that always picks the first output scores half. The rubric is LLMBar's Vanilla prompt,
+in `config.yaml`, so that the rates compare with the ones LLMBar published.
+
+### The three variants
+
+| | the rubric | the verdict |
+|---|---|---|
+| `raw` | formatted by hand | Ollama's `format=` with the schema of `Verdict`, whose one field is `"Output (a)"` or `"Output (b)"`, validated by hand |
+| `langchain` | a `ChatPromptTemplate` | `create_async_llm_as_judge` from [openevals](https://github.com/langchain-ai/openevals), LangChain's library of evaluators, given the same schema |
+| `mcp` | a FastMCP prompt, `compare_outputs`, fetched with `get_prompt` | a tool, `record_verdict`, whose one parameter can only be one of the two labels; FastMCP refuses any other |
+
+`langchain.evaluation` is gone from LangChain 1.x; openevals replaces it. Given the `Verdict`
+schema, it sends the request `raw` sends, by test. Out of the box, it would ask for a written
+reasoning before a score, which the Vanilla rubric forbids. The rubric is one user message in
+all three, LLMBar's system sentence first, since an MCP prompt has no system role; it ends with
+how to answer, in JSON for `raw` and `langchain`, with the tool for `mcp`. MCP sampling, where
+the server would ask the client's model itself, is not used: the current protocol removed
+requests from server to client (SEP-2322), and FastMCP 4 follows it.
+
+### Bench
+
+`agentic-patterns bench --case judge` scores:
+
+- right: the verdict names the better output, as labelled in that order;
+- consistent: a pair whose two verdicts pick the same output, whatever its position;
+- both right: a pair judged right in both orders;
+- first picked: the share of verdicts naming Output (a), one half without position bias.
+
+An answer that is neither label is invalid, and wrong.
+
+### Results
+
+Measured on 3 November 2026, temperature 0, `think: false`, one run per verdict, the model
+reloaded between phases (`summary-judge-20261103T101929Z.md` and `…T104008Z.md`):
+
+| model | variant | natural | adversarial | all | consistent | both right | first picked | invalid | s median |
+|---|---|---|---|---|---|---|---|---|---|
+| `llama3.2:3b` | raw | 129/200 | 89/200 | 218/400 | 64/200 | 41/200 | 0.84 | 0 | 0.7 |
+| `llama3.2:3b` | langchain | 129/200 | 89/200 | 218/400 | 64/200 | 41/200 | 0.84 | 0 | 0.7 |
+| `llama3.2:3b` | mcp | 136/200 | 84/200 | 220/400 | 74/200 | 48/200 | 0.80 | 3 | 1.0 |
+| `qwen3.5:4b-mlx` | raw | 176/200 | 123/200 | 299/400 | 135/200 | 117/200 | 0.65 | 0 | 1.1 |
+| `qwen3.5:4b-mlx` | langchain | 175/200 | 123/200 | 298/400 | 136/200 | 117/200 | 0.65 | 0 | 1.1 |
+| `qwen3.5:4b-mlx` | mcp | 175/200 | 125/200 | 300/400 | 154/200 | 127/200 | 0.58 | 1 | 2.0 |
+
+LLMBar's own figures for the same rubric, on its full sets, the adversarial ones averaged with
+equal weights as in the sample here: GPT-4 95.5% natural and 80.8% adversarial; PaLM 2 83.0%
+and 65.2%; ChatGPT 81.5% and 30.6%; Llama-2-70B-Chat 80.5% and 37.1%. Here, `qwen3.5:4b-mlx`
+is right on 88% of the natural verdicts and 62% of the adversarial ones, `llama3.2:3b` on 65%
+and 45%.
+
+What it shows:
+
+- `llama3.2:3b` is not a judge for this task. It names Output (a) in 84% of its verdicts, gives
+  the same answer in both orders for one pair in three, and does no better than a coin on the
+  adversarial pairs.
+- `qwen3.5:4b-mlx` is right on 3 verdicts in 4, and both ways on 117 pairs of 200, which is the
+  figure to read: a verdict that flips with the order is not a judgement. Adversarial pairs
+  fool it 4 times in 10; it still leans to Output (a), 65% of the time.
+- Swapping the outputs is what shows it. Judged in one order only, a judge that leans to the
+  first output looks better or worse depending on where the better one happens to be.
+- `raw` and `langchain` send the same request and give the same counts, within one verdict.
+  What openevals adds is its defaults and its LangSmith integration, not the call.
+- `mcp`, which asks for the verdict as a tool call, leans less to Output (a), 0.80 and 0.58
+  against 0.84 and 0.65, and is consistent on more pairs, 74 and 154 against 64 and 135, for the
+  same number of right verdicts. Its request differs from the other two by the tool and the last
+  line of the prompt; which of the two does it, the runs do not say. It costs 0.3 to 0.9 s more
+  per verdict.
+
 ## Limits of the measures
 
 What the tables can say, and what they cannot:
@@ -617,8 +700,8 @@ What the tables can say, and what they cannot:
 - One machine, two small models. Every figure comes from one Apple Silicon Mac running
   Ollama, `llama3.2:3b` on its default engine, `qwen3.5:4b-mlx` on MLX. A larger model,
   another runtime or a GPU server can change rates and latencies alike.
-- Small samples. 100 products, 100 listings, 36 conversations, 60 questions, and 6 agent
-  questions run 20 times. The 95% intervals are wide: 67/100 is 0.57 to 0.75, 32/36 is 0.75
+- Small samples. 100 products, 100 listings, 36 conversations, 60 questions, 200 pairs to
+  judge, and 6 agent questions run 20 times. The 95% intervals are wide: 67/100 is 0.57 to 0.75, 32/36 is 0.75
   to 0.96. A difference of one to three items between variants lies within them and is not
   read as a difference.
 - One run per item, except in the agent case, and temperature 0 is not determinism. The same
@@ -633,7 +716,11 @@ What the tables can say, and what they cannot:
 - The references are the data's. The categories are the shop's own, loose between Electronics
   and Computers&Accessories; the listings and conversations come from templates; the RAG
   references are read from the descriptions and scored strictly, so that "Maine" is not USA.
-  Part of what is counted as error is the reference.
+  Part of what is counted as error is the reference. The judge's reference is LLMBar's labels,
+  set by its authors.
+- LLMBar's published rates are a point of comparison, not a race: other models, answering in
+  free text where the judges here answer in JSON or with a tool, on its full adversarial sets
+  where this sample takes 25 of each.
 - The frameworks are measured as set up here, each variant made to send the model the same
   request as `raw`. Their defaults differ, and the sections say where: LangChain's handling of
   tool errors and docstrings, the schema Ollama's `format=` does not show the model. Out of the
@@ -677,8 +764,15 @@ src/agentic_patterns/
 │   ├── with_langchain.py  a BaseRetriever in an LCEL chain
 │   ├── with_mcp.py        a search tool the model calls
 │   └── scoring.py         found, right, right without the document
+├── patterns/judge/
+│   ├── task.py            LLMBar pairs, both orders, the Verdict type
+│   ├── raw.py             format= and model_validate_json
+│   ├── with_langchain.py  openevals' create_async_llm_as_judge
+│   ├── with_mcp.py        the rubric as a prompt, the verdict as a tool
+│   └── scoring.py         right, consistent, position bias
 ├── cases.py          the use cases the bench can run
 ├── bench.py          the interleaved run loop, agent scoring, Wilson intervals
+├── reload.py         reloads the model between phases, emptying Ollama's cache
 ├── rendering.py      tables
 └── cli.py            cyclopts commands
 evaluation/           bench outcomes and summaries, one pair per measurement
@@ -710,7 +804,9 @@ and `langchain` are checked to send the same messages and schema, and the MCP to
 match `Listing` field by field. For conversation memory, the three variants are checked to send
 the same history at every turn, and two runs never to share one. For RAG, `raw` and `langchain`
 are checked to send the same request, and `mcp` to pass the model's own query to the search and
-the same blocks back.
+the same blocks back. For the judge, `raw` and `langchain` are checked to send the same request,
+the MCP tool to accept only the two labels, and the scoring to tell a consistent judge from one
+that always picks the first output.
 
 `agentic-patterns rescore <outcomes> --case <case>` scores a stored run again after a change in
 a scorer. The agent case is excluded: its expected date is the day of the run.
