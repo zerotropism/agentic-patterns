@@ -15,6 +15,7 @@ from agentic_patterns.cases import (
     CaseError,
     build_agent,
     build_classifier,
+    build_judge,
     build_memory,
     build_parser,
     build_rag,
@@ -23,6 +24,7 @@ from agentic_patterns.cases import (
 )
 from agentic_patterns.config import generation_settings, load_config, model_name
 from agentic_patterns.patterns.agent import VARIANTS
+from agentic_patterns.patterns.judge.task import load_task as load_judge
 from agentic_patterns.patterns.memory.task import load_task as load_memory
 from agentic_patterns.patterns.parsing.task import load_task as load_parsing
 from agentic_patterns.patterns.prompt.task import load_task as load_prompt
@@ -161,6 +163,29 @@ async def ask(
     for call in result.tool_calls:
         console.print(f"  [dim]search {escape(str(call.arguments))} -> {escape(call.result)}[/dim]")
     console.print(f"  [dim]expected {escape(chosen.answer)}, from {chosen.document}[/dim]")
+    console.print(escape(result.answer))
+
+
+@app.command
+async def judge(
+    judgement: str | None = None,
+    *,
+    variant: Variant = "raw",
+    config: ConfigPath = None,
+) -> None:
+    """Judge one pair of the judge case, in one order (natural-000:ab); the first by default."""
+    loaded = load_config(config)
+    prompts, judgements = load_judge(loaded)
+    chosen = (
+        next((j for j in judgements if j.id == judgement), None) if judgement else judgements[0]
+    )
+    if chosen is None:
+        console.print(f"{escape(judgement or '')} is not in the sample.")
+        raise SystemExit(1)
+    result = await build_judge(variant, loaded, prompts).run(chosen)
+    console.print(f"[bold]{result.variant}[/bold] — {chosen.id}, {result.duration_seconds:.1f}s")
+    console.print(escape(chosen.instruction[:300]))
+    console.print(f"  [dim]expected {chosen.expected}[/dim]")
     console.print(escape(result.answer))
 
 
